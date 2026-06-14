@@ -183,10 +183,15 @@ class APIFootballProvider(FootballDataProvider):
         return resp.json()
 
     async def fetch_live(self) -> list[MatchSnapshot]:
-        # `live=<id>` restricts to one league; `live=all` returns every live match.
-        live = str(self.league_id) if self.league_id is not None else "all"
-        data = await self._get("/fixtures", {"live": live})
+        # API-Football's `live=<league_id>` filter is unreliable (returns nothing on the
+        # free tier even when that league has a live match), so we always pull `live=all`
+        # — still a single request — and filter by league id CLIENT-SIDE.
+        data = await self._get("/fixtures", {"live": "all"})
         fixtures = data.get("response", [])
+        if self.league_id is not None:
+            fixtures = [
+                f for f in fixtures if (f.get("league") or {}).get("id") == self.league_id
+            ]
         snapshots: list[MatchSnapshot] = []
         for fixture in fixtures:
             stats = events = None

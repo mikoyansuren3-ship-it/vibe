@@ -85,33 +85,44 @@ def test_simulation_is_deterministic():
 
 
 # -- API-Football league filter (offline; _get is monkeypatched) ------------ #
-async def test_apifootball_league_filter_sets_live_param(monkeypatch):
+def _two_league_fixtures():
+    def fx(fid, home, away, league_id):
+        return {
+            "fixture": {"id": fid, "status": {"short": "1H", "elapsed": 20}},
+            "teams": {"home": {"name": home}, "away": {"name": away}},
+            "goals": {"home": 0, "away": 0},
+            "league": {"id": league_id, "name": "x"},
+        }
+
+    return {"response": [fx(1, "A", "B", 1), fx(2, "C", "D", 99)]}
+
+
+async def test_apifootball_filters_to_league_client_side(monkeypatch):
     from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
 
     p = APIFootballProvider(api_key="x", fetch_statistics=False, league_id=1)
     captured: dict = {}
 
     async def fake_get(endpoint, params):
-        captured.update(endpoint=endpoint, params=params)
-        return {"response": []}
+        captured.update(params=params)
+        return _two_league_fixtures()
 
     monkeypatch.setattr(p, "_get", fake_get)
-    await p.fetch_live()
-    assert captured["params"] == {"live": "1"}  # World Cup only
+    snaps = await p.fetch_live()
+    assert captured["params"] == {"live": "all"}  # always all; filter is client-side
+    assert len(snaps) == 1 and snaps[0].home_team == "A"  # league 99 dropped
     await p.aclose()
 
 
-async def test_apifootball_no_filter_polls_all(monkeypatch):
+async def test_apifootball_no_filter_keeps_all_leagues(monkeypatch):
     from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
 
     p = APIFootballProvider(api_key="x", fetch_statistics=False, league_id=None)
-    captured: dict = {}
 
     async def fake_get(endpoint, params):
-        captured.update(params=params)
-        return {"response": []}
+        return _two_league_fixtures()
 
     monkeypatch.setattr(p, "_get", fake_get)
-    await p.fetch_live()
-    assert captured["params"] == {"live": "all"}
+    snaps = await p.fetch_live()
+    assert len(snaps) == 2
     await p.aclose()

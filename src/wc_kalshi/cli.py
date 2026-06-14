@@ -44,8 +44,7 @@ async def _cmd_run(args) -> int:
     cfg = _load(args)
     log.info("starting run", extra={"mode": cfg.mode.value, "dashboard": bool(args.dashboard)})
     rt = build_runtime(cfg)
-    provider = build_football_provider(cfg)
-    if args.matches and provider.name == "simulated":
+    if getattr(args, "sim", False) or cfg.football.provider == "simulated":
         from .ingestion.football.simulated import SimulatedFootballProvider
 
         provider = SimulatedFootballProvider(
@@ -53,6 +52,8 @@ async def _cmd_run(args) -> int:
             num_matches=args.matches,
             minutes_per_tick=cfg.football.sim_minutes_per_tick,
         )
+    else:
+        provider = build_football_provider(cfg)
     alerter = Alerter(cfg, rt.bus)
     alerter.start()
     orch = Orchestrator(rt, provider, trade=not args.no_trade)
@@ -203,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--duration", type=float, default=None, help="auto-stop after N seconds")
     r.add_argument("--dashboard", action="store_true", help="serve the web dashboard")
     r.add_argument("--no-trade", action="store_true", help="observe only, place no orders")
+    r.add_argument("--sim", action="store_true", help="force the built-in simulator (ignore the live feed)")
 
     b = sub.add_parser("backtest", help="synthetic backtest (no keys)")
     b.add_argument("--matches", type=int, default=100)
