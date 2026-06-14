@@ -71,6 +71,10 @@ class FootballSection(BaseModel):
     thestatsapi_base: str = "https://api.thestatsapi.com"
     request_timeout_seconds: float = 10.0
     max_retries: int = 3
+    # Restrict API-Football live polling to one league (FIFA World Cup = 1) so we
+    # only ingest WC fixtures and spend far less of the request quota. None = all live.
+    apifootball_league_id: int | None = None
+    apifootball_fetch_statistics: bool = True
     sim_tick_seconds: float = 1.0
     sim_minutes_per_tick: float = 1.0
     sim_seed: int = 42

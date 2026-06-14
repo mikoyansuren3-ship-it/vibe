@@ -157,10 +157,13 @@ class APIFootballProvider(FootballDataProvider):
         timeout: float = 10.0,
         max_retries: int = 3,
         fetch_statistics: bool = True,
+        league_id: int | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.max_retries = max_retries
         self.fetch_statistics = fetch_statistics
+        # When set, only poll this league's live fixtures (e.g. 1 = FIFA World Cup).
+        self.league_id = league_id
         self._client = httpx.AsyncClient(
             timeout=timeout, headers={"x-apisports-key": api_key}
         )
@@ -180,7 +183,9 @@ class APIFootballProvider(FootballDataProvider):
         return resp.json()
 
     async def fetch_live(self) -> list[MatchSnapshot]:
-        data = await self._get("/fixtures", {"live": "all"})
+        # `live=<id>` restricts to one league; `live=all` returns every live match.
+        live = str(self.league_id) if self.league_id is not None else "all"
+        data = await self._get("/fixtures", {"live": live})
         fixtures = data.get("response", [])
         snapshots: list[MatchSnapshot] = []
         for fixture in fixtures:

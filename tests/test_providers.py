@@ -82,3 +82,36 @@ def test_simulation_is_deterministic():
     a = simulate_full_match(seed=11)[-1]
     b = simulate_full_match(seed=11)[-1]
     assert (a.home_score, a.away_score, round(a.home.xg, 4)) == (b.home_score, b.away_score, round(b.home.xg, 4))
+
+
+# -- API-Football league filter (offline; _get is monkeypatched) ------------ #
+async def test_apifootball_league_filter_sets_live_param(monkeypatch):
+    from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
+
+    p = APIFootballProvider(api_key="x", fetch_statistics=False, league_id=1)
+    captured: dict = {}
+
+    async def fake_get(endpoint, params):
+        captured.update(endpoint=endpoint, params=params)
+        return {"response": []}
+
+    monkeypatch.setattr(p, "_get", fake_get)
+    await p.fetch_live()
+    assert captured["params"] == {"live": "1"}  # World Cup only
+    await p.aclose()
+
+
+async def test_apifootball_no_filter_polls_all(monkeypatch):
+    from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
+
+    p = APIFootballProvider(api_key="x", fetch_statistics=False, league_id=None)
+    captured: dict = {}
+
+    async def fake_get(endpoint, params):
+        captured.update(params=params)
+        return {"response": []}
+
+    monkeypatch.setattr(p, "_get", fake_get)
+    await p.fetch_live()
+    assert captured["params"] == {"live": "all"}
+    await p.aclose()
