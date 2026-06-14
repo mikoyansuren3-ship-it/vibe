@@ -5,7 +5,7 @@
 > **[ASSUMPTION]** and is treated as a configurable / runtime-discoverable value in
 > the code rather than a hard-coded magic constant.
 >
-> Last updated: 2026-06-13.
+> Last updated: 2026-06-14.
 
 ---
 
@@ -24,9 +24,15 @@ still resolve): `https://api.elections.kalshi.com/trade-api/v2`,
 The system **defaults to the demo environment** and never to production unless
 explicitly configured.
 
+> ✅ **Confirmed 2026-06-14** against the live API reference: every endpoint page
+> (e.g. *Generate API Key*) shows the production host `external-api.kalshi.com/trade-api/v2`,
+> matching `kalshi.rest_base_prod` in config. The demo host is the `…demo.kalshi.co`
+> equivalent.
+
 Sources:
 - [Kalshi — API Environments and Endpoints](https://docs.kalshi.com/getting_started/api_environments)
 - [Kalshi — Test In The Demo Environment](https://docs.kalshi.com/getting_started/demo_env)
+- [Kalshi — Generate API Key (shows prod base URL)](https://docs.kalshi.com/api-reference/api-keys/generate-api-key)
 
 ### 1.2 Authentication & request signing
 
@@ -52,8 +58,17 @@ Signing details, confirmed from the docs:
 Implemented in `src/wc_kalshi/ingestion/kalshi/auth.py` and unit-tested with a locally
 generated throwaway RSA key in `tests/test_kalshi_auth.py` (no network needed).
 
+> ✅ **Confirmed 2026-06-14** against the live *Generate API Key* reference page: it lists
+> exactly these three required headers — `KALSHI-ACCESS-KEY` ("Your API key ID"),
+> `KALSHI-ACCESS-SIGNATURE` ("RSA-PSS signature of the request"), and
+> `KALSHI-ACCESS-TIMESTAMP` ("Request timestamp in milliseconds") — matching this
+> implementation exactly. Note: the first key must be created in the Kalshi **web
+> dashboard** (the key-management REST endpoints themselves require an existing key),
+> and demo/production keys are **separate**.
+
 Sources:
 - [Kalshi — API Keys](https://docs.kalshi.com/getting_started/api_keys)
+- [Kalshi — Generate API Key (confirms the three auth headers + RSA-PSS)](https://docs.kalshi.com/api-reference/api-keys/generate-api-key)
 - [QuantVPS — Kalshi Order Book API: Endpoints, Auth, and Connection Setup](https://www.quantvps.com/blog/kalshi-order-book-api-endpoints-explained)
 - [AgentBets — Kalshi API Guide: RSA Auth & Demo Sandbox (2026)](https://agentbets.ai/guides/kalshi-api-guide/)
 

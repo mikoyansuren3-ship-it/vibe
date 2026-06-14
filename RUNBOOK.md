@@ -105,17 +105,25 @@ Everything is UTC-timestamped and **append-only** so a run is fully replayable.
 
 ## 6. Going to DEMO (Kalshi sandbox, mock funds)
 
-1. Create an API key in the Kalshi dashboard → you get a **Key ID** + an **RSA private
-   key** (shown once). Save the PEM **outside the repo**.
-2. In `.env`:
+1. **Make a demo account** at <https://demo.kalshi.co> (separate from production — use
+   mock name/address/SSN; just use a real, accessible email). Demo and prod keys are
+   **not** interchangeable.
+2. **Create the key** at **Profile → Settings → API Keys → "Create New API Key"** (while
+   logged into the *demo* site). You're shown a **Key ID** and a **private key** (RSA PEM)
+   **once** — it cannot be retrieved again.
+   - Save the PEM to a file **outside the repo**, e.g. `~/.kalshi/demo.pem`, then
+     `chmod 600 ~/.kalshi/demo.pem`.
+   - (The `Create/Generate API Key` *REST* endpoints require an existing key to call, so
+     bootstrap your **first** key through this web UI, not the API.)
+3. In `.env`:
    ```
    WCK_MODE=demo
-   KALSHI_API_KEY_ID=...
-   KALSHI_PRIVATE_KEY_PATH=/secure/path/kalshi_demo.pem
+   KALSHI_API_KEY_ID=<the Key ID>
+   KALSHI_PRIVATE_KEY_PATH=/Users/you/.kalshi/demo.pem
    ```
-3. `wck doctor` → confirm `mode: demo`, `kalshi creds set: True`.
-4. Map markets: `wck discover-markets` (lists World Cup events/markets for the series).
-5. `wck run --dashboard` — orders now hit the Kalshi **demo** environment.
+4. `wck doctor` → confirm `mode: demo`, `kalshi creds set: True`.
+5. Map markets: `wck discover-markets` (lists World Cup events/markets for the series).
+6. `wck run --dashboard` — orders now hit the Kalshi **demo** environment.
 
 Validate the **whole** path in demo (orders accepted, fills booked, P&L sane) before even
 considering live.
