@@ -1,0 +1,20 @@
+# Pinned-ish runtime deps. Canonical source of truth is pyproject.toml.
+# Install with:  pip install -e ".[dev]"   (recommended)
+# or:            pip install -r requirements.txt
+pydantic>=2.6
+pydantic-settings>=2.1
+httpx>=0.27
+websockets>=12.0
+tenacity>=8.2
+cryptography>=42.0
+SQLAlchemy>=2.0
+PyYAML>=6.0
+numpy>=1.26
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-dotenv>=1.0
+
+# dev / test
+pytest>=8.0
+pytest-asyncio>=0.23
+respx>=0.21

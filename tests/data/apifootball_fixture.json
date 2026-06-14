@@ -1,0 +1,44 @@
+{
+  "fixture": {
+    "id": 1399123,
+    "status": {"long": "Second Half", "short": "2H", "elapsed": 67},
+    "venue": {"name": "MetLife Stadium", "city": "East Rutherford"}
+  },
+  "teams": {
+    "home": {"name": "USA", "id": 22},
+    "away": {"name": "Wales", "id": 767}
+  },
+  "goals": {"home": 1, "away": 0},
+  "_statistics": [
+    {
+      "team": {"name": "USA"},
+      "statistics": [
+        {"type": "Shots on Goal", "value": 4},
+        {"type": "Total Shots", "value": 11},
+        {"type": "Ball Possession", "value": "58%"},
+        {"type": "Corner Kicks", "value": 5},
+        {"type": "Offsides", "value": 1},
+        {"type": "Fouls", "value": 9},
+        {"type": "Yellow Cards", "value": 2},
+        {"type": "Red Cards", "value": 0},
+        {"type": "Goalkeeper Saves", "value": 3},
+        {"type": "expected_goals", "value": "1.34"},
+        {"type": "Passes %", "value": "84%"}
+      ]
+    },
+    {
+      "team": {"name": "Wales"},
+      "statistics": [
+        {"type": "Shots on Goal", "value": 2},
+        {"type": "Total Shots", "value": 7},
+        {"type": "Ball Possession", "value": "42%"},
+        {"type": "Corner Kicks", "value": 3},
+        {"type": "Red Cards", "value": 1},
+        {"type": "expected_goals", "value": "0.61"}
+      ]
+    }
+  ],
+  "_events": [
+    {"time": {"elapsed": 55}, "team": {"name": "Wales"}, "type": "Card", "detail": "Red Card"}
+  ]
+}

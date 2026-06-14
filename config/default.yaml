@@ -1,0 +1,95 @@
+# ===========================================================================
+# Default, non-secret configuration. Secrets come from environment variables
+# (see .env.example). Override locally by creating config/local.yaml (git-ignored)
+# which is shallow-merged on top of this file, or point WCK_CONFIG at another file.
+# ===========================================================================
+
+# paper | demo | live   (env WCK_MODE overrides this)
+mode: paper
+
+app:
+  log_level: INFO
+  log_format: json            # json | console
+  data_dir: ./data
+  db_url: "sqlite:///./data/wck.sqlite3"
+
+kalshi:
+  environment: demo           # demo | prod -> selects which base URLs below are used
+  rest_base_demo: "https://external-api.demo.kalshi.co/trade-api/v2"
+  ws_base_demo: "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
+  rest_base_prod: "https://external-api.kalshi.com/trade-api/v2"
+  ws_base_prod: "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+  # Best-guess WC series ticker; discovered/overridden at runtime (see research.md §1.7).
+  worldcup_series_ticker: "KXWORLDCUP"
+  poll_interval_seconds: 2.0
+  request_timeout_seconds: 10.0
+  max_retries: 4
+  # Fee model (research.md §1.6). taker_fee = ceil(coeff * C * P * (1-P) * 100)/100.
+  fee_coefficient: 0.07
+  maker_fee_fraction: 0.25
+
+football:
+  provider: simulated         # simulated | apifootball | thestatsapi
+  poll_interval_seconds: 15.0
+  apifootball_base: "https://v3.football.api-sports.io"
+  thestatsapi_base: "https://api.thestatsapi.com"
+  request_timeout_seconds: 10.0
+  max_retries: 3
+  # Simulated-feed knobs (used only when provider == simulated)
+  sim_tick_seconds: 1.0       # wall-clock seconds between simulated ticks
+  sim_minutes_per_tick: 1.0   # match-minutes advanced per tick
+  sim_seed: 42
+
+consensus:
+  polymarket_enabled: false
+  polymarket_gamma_base: "https://gamma-api.polymarket.com"
+
+model:
+  name: dixon_coles_inplay
+  base_home_xg: 1.45          # league-average full-match home expected goals
+  base_away_xg: 1.20          # league-average full-match away expected goals
+  home_advantage: 0.20        # multiplicative bump applied to home rate
+  draw_rho: -0.05             # Dixon-Coles low-score dependence correction
+  # Live blending: how much weight to put on observed live xG vs the prior rate
+  # when projecting remaining-match goals. 0 = ignore live xG, 1 = trust it fully.
+  live_xg_weight: 0.6
+  red_card_xg_penalty: 0.55   # multiply a team's remaining rate by this per net red card
+  max_goals: 12               # truncation for the scoreline distribution
+
+edge:
+  min_edge: 0.05              # raw |model - market| threshold (probability points)
+  min_edge_after_costs: 0.03  # required edge AFTER subtracting fees+spread+slippage
+  slippage_cents: 1           # assumed adverse slippage per contract, in cents
+  devig_method: proportional  # proportional | shin | power
+
+risk:
+  starting_bankroll: 1000.0   # paper/demo notional bankroll for Kelly sizing
+  kelly_fraction: 0.25        # fractional Kelly (NEVER 1.0)
+  max_position_per_market: 100      # contracts, absolute cap per market
+  max_exposure_per_match: 200.0     # dollars at risk per match
+  max_total_open_exposure: 1000.0   # dollars across all matches
+  max_daily_loss: 250.0             # dollars; breaching halts trading for the day
+  min_price: 0.03                   # do not trade outside [min,max] price (illiquid tails)
+  max_price: 0.97
+  min_order_contracts: 1
+
+execution:
+  paper_fill_model: cross_spread  # cross_spread (fill at our limit, realistic) | midpoint (optimistic)
+  live_confirmed: false       # MUST be true (and WCK_ALLOW_LIVE=true) to ever trade live
+  audit_log_path: ./data/audit.jsonl
+  order_time_in_force: ioc     # ioc | gtc (paper/demo)
+  order_type: limit            # limit | market (demo/live)
+  min_retrade_minutes: 8       # min match-minutes between entries in the same market
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8000
+
+alerts:
+  enabled: true
+  console: true
+  webhook: false              # POST to ALERTS_WEBHOOK_URL if true
+  on_goal: true
+  on_red_card: true
+  on_guardrail: true
+  divergence_threshold: 0.08  # alert when |model - market| exceeds this

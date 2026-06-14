@@ -1,0 +1,121 @@
+"""Edge detector.
+
+For each outcome we report the headline divergence (model vs de-vigged market mid)
+*and* judge tradability on the price we would actually transact at: we BUY Yes at
+the ask and SELL Yes at the bid, so the spread is paid implicitly. From that
+executable edge we further subtract the Kalshi fee and an assumed slippage. A
+signal is only actionable when this cost-adjusted edge clears the configured
+threshold and the price sits inside the tradable band.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from ..fees import fee_per_contract
+from ..market.implied import MarketView
+from ..models.schemas import EdgeSignal, OrderAction, Outcome, Probabilities
+
+if TYPE_CHECKING:
+    from ..config import AppConfig
+
+
+class EdgeDetector:
+    def __init__(
+        self,
+        *,
+        min_edge: float = 0.04,
+        min_edge_after_costs: float = 0.02,
+        slippage_cents: int = 1,
+        fee_coefficient: float = 0.07,
+        maker_fraction: float = 0.25,
+        min_price: float = 0.03,
+        max_price: float = 0.97,
+    ) -> None:
+        self.min_edge = min_edge
+        self.min_edge_after_costs = min_edge_after_costs
+        self.slippage = slippage_cents / 100.0
+        self.fee_coefficient = fee_coefficient
+        self.maker_fraction = maker_fraction
+        self.min_price = min_price
+        self.max_price = max_price
+
+    @classmethod
+    def from_config(cls, cfg: "AppConfig") -> "EdgeDetector":
+        return cls(
+            min_edge=cfg.edge.min_edge,
+            min_edge_after_costs=cfg.edge.min_edge_after_costs,
+            slippage_cents=cfg.edge.slippage_cents,
+            fee_coefficient=cfg.kalshi.fee_coefficient,
+            maker_fraction=cfg.kalshi.maker_fee_fraction,
+            min_price=cfg.risk.min_price,
+            max_price=cfg.risk.max_price,
+        )
+
+    def evaluate(self, model: Probabilities, market: MarketView) -> list[EdgeSignal]:
+        signals: list[EdgeSignal] = []
+        for outcome, om in market.outcomes.items():
+            signals.append(self._evaluate_one(outcome, model, om, market))
+        return signals
+
+    def _evaluate_one(self, outcome: Outcome, model: Probabilities, om, market) -> EdgeSignal:
+        model_p = model.get(outcome)
+        implied = om.implied_prob
+        raw_edge = model_p - implied
+        ask = om.yes_ask / 100.0 if om.yes_ask is not None else None
+        bid = om.yes_bid / 100.0 if om.yes_bid is not None else None
+
+        action: OrderAction | None = None
+        exec_price: float | None = None
+        net_edge = 0.0
+
+        if raw_edge > 0 and ask is not None:
+            # Model says Yes underpriced -> BUY Yes at the ask.
+            fee = fee_per_contract(ask, coefficient=self.fee_coefficient)
+            net_edge = model_p - ask - fee - self.slippage
+            action, exec_price = OrderAction.BUY, ask
+        elif raw_edge < 0 and bid is not None:
+            # Model says Yes overpriced -> SELL Yes at the bid.
+            fee = fee_per_contract(bid, coefficient=self.fee_coefficient)
+            net_edge = bid - model_p - fee - self.slippage
+            action, exec_price = OrderAction.SELL, bid
+
+        gross = abs(raw_edge)
+        est_cost = max(0.0, gross - net_edge)
+
+        actionable = bool(
+            action is not None
+            and exec_price is not None
+            and net_edge >= self.min_edge_after_costs
+            and gross >= self.min_edge
+            and self.min_price <= exec_price <= self.max_price
+            and om.market_ticker
+        )
+        reason = self._reason(action, exec_price, net_edge, gross, om)
+
+        return EdgeSignal(
+            match_id=model.match_id,
+            outcome=outcome,
+            market_ticker=om.market_ticker,
+            model_prob=model_p,
+            market_prob=implied,
+            market_yes_ask=om.yes_ask,
+            market_yes_bid=om.yes_bid,
+            raw_edge=raw_edge,
+            est_cost=est_cost,
+            net_edge=net_edge,
+            action=action if actionable else None,
+            actionable=actionable,
+            reason=reason,
+        )
+
+    def _reason(self, action, exec_price, net_edge, gross, om) -> str:
+        if action is None:
+            return "no executable quote on the favourable side"
+        if gross < self.min_edge:
+            return f"raw edge {gross:.3f} < min_edge {self.min_edge:.3f}"
+        if net_edge < self.min_edge_after_costs:
+            return f"net edge {net_edge:.3f} < threshold {self.min_edge_after_costs:.3f} after costs"
+        if exec_price is not None and not (self.min_price <= exec_price <= self.max_price):
+            return f"price {exec_price:.2f} outside tradable band"
+        return f"actionable: {action.value} yes @ {exec_price:.2f}, net edge {net_edge:.3f}"

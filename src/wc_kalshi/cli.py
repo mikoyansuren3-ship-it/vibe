@@ -1,0 +1,247 @@
+"""Command-line entry point.
+
+  wck run [--mode paper] [--matches N] [--ticks N] [--duration S]
+          [--dashboard] [--no-trade]      run the live/paper pipeline
+  wck backtest [--matches N] [--seed S] [--json out.json]   synthetic backtest (no keys)
+  wck replay --db path.sqlite3 [--match-id ID]              replay a stored session
+  wck discover-markets [--series TICKER]                    (demo/live) map WC markets
+  wck doctor                                                print resolved config & checks
+
+Defaults are safe: paper mode, simulated feed, no real orders.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import signal
+import sys
+
+from .config import ConfigError, RunMode, load_config
+from .logging_setup import configure_logging, get_logger
+
+log = get_logger("cli")
+
+
+def _load(args) -> "object":
+    if getattr(args, "mode", None):
+        import os
+
+        os.environ["WCK_MODE"] = args.mode
+    cfg = load_config()
+    configure_logging(cfg.app.log_level, cfg.app.log_format)
+    return cfg
+
+
+# --------------------------------------------------------------------------- #
+async def _cmd_run(args) -> int:
+    from .engine.builders import build_runtime
+    from .engine.orchestrator import Orchestrator
+    from .ingestion.football.base import build_football_provider
+    from .observability.alerts import Alerter
+
+    cfg = _load(args)
+    log.info("starting run", extra={"mode": cfg.mode.value, "dashboard": bool(args.dashboard)})
+    rt = build_runtime(cfg)
+    provider = build_football_provider(cfg)
+    if args.matches and provider.name == "simulated":
+        from .ingestion.football.simulated import SimulatedFootballProvider
+
+        provider = SimulatedFootballProvider(
+            seed=cfg.football.sim_seed,
+            num_matches=args.matches,
+            minutes_per_tick=cfg.football.sim_minutes_per_tick,
+        )
+    alerter = Alerter(cfg, rt.bus)
+    alerter.start()
+    orch = Orchestrator(rt, provider, trade=not args.no_trade)
+
+    # graceful shutdown
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, orch.stop)
+        except NotImplementedError:  # pragma: no cover (windows)
+            pass
+
+    tasks = [asyncio.create_task(orch.run(max_ticks=args.ticks))]
+    server = None
+    if args.dashboard:
+        import uvicorn
+
+        from .dashboard.app import create_app
+
+        app = create_app(rt, orch)
+        server = uvicorn.Server(
+            uvicorn.Config(app, host=cfg.dashboard.host, port=cfg.dashboard.port, log_level="warning")
+        )
+        tasks.append(asyncio.create_task(server.serve()))
+        log.info("dashboard up", extra={"url": f"http://{cfg.dashboard.host}:{cfg.dashboard.port}"})
+
+    if args.duration:
+        async def _timeout() -> None:
+            await asyncio.sleep(args.duration)
+            orch.stop()
+            if server:
+                server.should_exit = True
+
+        tasks.append(asyncio.create_task(_timeout()))
+
+    try:
+        if args.dashboard and not args.duration:
+            # keep dashboard alive after the sim ends until Ctrl-C
+            await tasks[0]
+            log.info("matches done; dashboard still serving (Ctrl-C to exit)")
+            await asyncio.gather(*tasks[1:], return_exceptions=True)
+        else:
+            await tasks[0]
+            if server:
+                server.should_exit = True
+                await asyncio.gather(*tasks[1:], return_exceptions=True)
+    finally:
+        for t in tasks:
+            t.cancel()
+        await alerter.aclose()
+        await rt.aclose()
+    _print_summary(rt)
+    return 0
+
+
+def _print_summary(rt) -> None:
+    ps = rt.portfolio.snapshot(rt.last_mids)
+    rs = rt.risk.snapshot()
+    cm = rt.calibration.metrics()
+    print("\n--- RUN SUMMARY -------------------------------------------")
+    print(f"  mode={rt.cfg.mode.value}  equity={ps['equity']}  realized={ps['realized_pnl']}  fees={ps['fees_paid']}")
+    print(f"  halted={rs['halted']} {rs['halt_reason']}  kill_switch={rs['kill_switch']}")
+    if cm["n"]:
+        print(f"  calibration: n={cm['n']:.0f} brier={cm['brier']:.3f} ece={cm['ece']:.3f}")
+    print("-----------------------------------------------------------")
+
+
+async def _cmd_backtest(args) -> int:
+    from .backtest.replay import Backtester
+
+    cfg = _load(args)
+    bt = Backtester(cfg, trade=not args.no_trade)
+    res = await bt.run_synthetic(n_matches=args.matches, seed0=args.seed)
+    print(res.report())
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump({**res.to_dict(), "reliability": res.reliability}, fh, indent=2)
+        print(f"wrote {args.json}")
+    await bt.aclose()
+    return 0
+
+
+async def _cmd_replay(args) -> int:
+    from .backtest.replay import Backtester
+    from .models.db import Database
+
+    cfg = _load(args)
+    source = Database(args.db if args.db.startswith("sqlite") else f"sqlite:///{args.db}")
+    bt = Backtester(cfg, trade=not args.no_trade)
+    res = await bt.run_replay(source, match_ids=[args.match_id] if args.match_id else None)
+    print(res.report())
+    await bt.aclose()
+    return 0
+
+
+async def _cmd_discover(args) -> int:
+    from .engine.builders import _build_kalshi_client
+
+    cfg = _load(args)
+    if cfg.is_paper:
+        print("discover-markets needs demo/live mode + Kalshi credentials (set WCK_MODE=demo).")
+        return 1
+    client = _build_kalshi_client(cfg)
+    try:
+        series = args.series or cfg.kalshi.worldcup_series_ticker
+        payload = await client.get_events(series_ticker=series, status="open")
+        events = payload.get("events", [])
+        print(f"Found {len(events)} events for series {series!r}:")
+        for ev in events[:50]:
+            title = ev.get("title") or ev.get("sub_title")
+            n_markets = len(ev.get("markets", []))
+            print(f"  {ev.get('event_ticker'):<28} {title}  ({n_markets} markets)")
+    finally:
+        await client.aclose()
+    return 0
+
+
+def _cmd_doctor(args) -> int:
+    try:
+        cfg = _load(args)
+    except ConfigError as exc:
+        print(f"CONFIG ERROR: {exc}")
+        return 1
+    creds = cfg.secrets.has_kalshi_creds()
+    print("wck doctor")
+    print(f"  mode:              {cfg.mode.value}")
+    print(f"  kalshi rest base:  {cfg.kalshi_rest_base}")
+    print(f"  football provider: {cfg.football.provider}")
+    print(f"  db:                {cfg.resolved_db_url()}")
+    print(f"  kalshi creds set:  {creds}")
+    print(f"  apifootball key:   {bool(cfg.secrets.apifootball_key)}")
+    print(f"  kelly fraction:    {cfg.risk.kelly_fraction}")
+    print(f"  edge thresholds:   min={cfg.edge.min_edge} after_costs={cfg.edge.min_edge_after_costs}")
+    print(f"  guardrails:        max_match=${cfg.risk.max_exposure_per_match} daily_loss=${cfg.risk.max_daily_loss}")
+    if cfg.mode is not RunMode.PAPER and not creds:
+        print("  WARNING: non-paper mode without Kalshi credentials — execution will fail.")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="wck", description="World Cup × Kalshi in-play edge engine")
+    p.add_argument("--mode", choices=["paper", "demo", "live"], help="override run mode")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    r = sub.add_parser("run", help="run the live/paper pipeline")
+    r.add_argument("--matches", type=int, default=3, help="simulated matches (simulated provider)")
+    r.add_argument("--ticks", type=int, default=None, help="max poll ticks then stop")
+    r.add_argument("--duration", type=float, default=None, help="auto-stop after N seconds")
+    r.add_argument("--dashboard", action="store_true", help="serve the web dashboard")
+    r.add_argument("--no-trade", action="store_true", help="observe only, place no orders")
+
+    b = sub.add_parser("backtest", help="synthetic backtest (no keys)")
+    b.add_argument("--matches", type=int, default=100)
+    b.add_argument("--seed", type=int, default=0)
+    b.add_argument("--no-trade", action="store_true")
+    b.add_argument("--json", type=str, default=None, help="write JSON result here")
+
+    rp = sub.add_parser("replay", help="replay a stored session DB")
+    rp.add_argument("--db", required=True, help="path to a sqlite db from a prior run")
+    rp.add_argument("--match-id", default=None)
+    rp.add_argument("--no-trade", action="store_true")
+
+    d = sub.add_parser("discover-markets", help="map WC markets via Kalshi (demo/live)")
+    d.add_argument("--series", default=None)
+
+    sub.add_parser("doctor", help="print resolved config and checks")
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        if args.command == "run":
+            return asyncio.run(_cmd_run(args))
+        if args.command == "backtest":
+            return asyncio.run(_cmd_backtest(args))
+        if args.command == "replay":
+            return asyncio.run(_cmd_replay(args))
+        if args.command == "discover-markets":
+            return asyncio.run(_cmd_discover(args))
+        if args.command == "doctor":
+            return _cmd_doctor(args)
+    except ConfigError as exc:
+        print(f"CONFIG ERROR: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

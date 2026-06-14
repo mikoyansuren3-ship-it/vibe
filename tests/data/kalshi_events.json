@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "event_ticker": "KXWCGAME-26JUN13USAWAL",
+      "title": "USA vs Wales",
+      "sub_title": "Group B — Match Winner",
+      "markets": [
+        {"ticker": "KXWCGAME-26JUN13USAWAL-USA", "yes_sub_title": "USA", "yes_bid": 52, "yes_ask": 55, "last_price": 54, "volume": 14200, "status": "active"},
+        {"ticker": "KXWCGAME-26JUN13USAWAL-DRAW", "yes_sub_title": "Draw", "yes_bid": 26, "yes_ask": 29, "last_price": 27, "volume": 8800, "status": "active"},
+        {"ticker": "KXWCGAME-26JUN13USAWAL-WAL", "yes_sub_title": "Wales", "yes_bid": 18, "yes_ask": 21, "last_price": 19, "volume": 6100, "status": "active"}
+      ]
+    },
+    {
+      "event_ticker": "KXWCGAME-26JUN13SPAGER",
+      "title": "Spain vs Germany",
+      "sub_title": "Group A — Match Winner",
+      "markets": [
+        {"ticker": "KXWCGAME-26JUN13SPAGER-SPA", "yes_sub_title": "Spain", "yes_bid": 48, "yes_ask": 51},
+        {"ticker": "KXWCGAME-26JUN13SPAGER-DRAW", "yes_sub_title": "Draw", "yes_bid": 27, "yes_ask": 30},
+        {"ticker": "KXWCGAME-26JUN13SPAGER-GER", "yes_sub_title": "Germany", "yes_bid": 22, "yes_ask": 25}
+      ]
+    }
+  ]
+}

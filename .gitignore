@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Secrets & local config
+.env
+config/local.yaml
+*.pem
+secrets/
+
+# Data, logs, db (never commit captured market/match data or audit logs)
+data/*.sqlite3
+data/*.sqlite3-*
+data/*.log
+data/*.log.jsonl
+data/audit*.jsonl
+data/runs/
+*.log
+
+# Local tooling / harness
+.claude/
+.idea/
+.vscode/
+
+# OS
+.DS_Store
