@@ -31,6 +31,37 @@ def _json_safe(obj: Any) -> Any:
     return obj
 
 
+def _active_bets(rt: "Runtime") -> list[dict[str, Any]]:
+    """Open positions enriched with team labels + live unrealized P&L."""
+    rows: list[dict[str, Any]] = []
+    for ticker, pos in rt.portfolio.positions.items():
+        held = pos.yes_contracts or pos.no_contracts
+        if not held:
+            continue
+        m = rt.state.matches.get(pos.match_id, {})
+        home, away = m.get("home_team", "?"), m.get("away_team", "?")
+        ov = pos.outcome.value
+        label = home if ov == "home" else away if ov == "away" else "Draw"
+        back = pos.yes_contracts >= pos.no_contracts
+        mid = rt.last_mids.get(ticker)
+        value = pos.value_at(mid) if mid is not None else None
+        rows.append(
+            {
+                "ticker": ticker,
+                "match": f"{home} v {away}",
+                "label": label,
+                "side": "back" if back else "fade",
+                "contracts": pos.yes_contracts if back else pos.no_contracts,
+                "cost": round(pos.cost_paid, 2),
+                "value": round(value, 2) if value is not None else None,
+                "unrealized": round(value - pos.cost_paid, 2) if value is not None else None,
+                "minute": m.get("minute"),
+            }
+        )
+    rows.sort(key=lambda r: abs(r["unrealized"] or 0), reverse=True)
+    return rows
+
+
 def create_app(rt: "Runtime", orchestrator: "Orchestrator | None" = None) -> FastAPI:
     app = FastAPI(title="World Cup × Kalshi — In-Play Edge", version="0.2.0")
 
@@ -47,6 +78,8 @@ def create_app(rt: "Runtime", orchestrator: "Orchestrator | None" = None) -> Fas
         data["portfolio"] = rt.portfolio.snapshot(rt.last_mids)
         data["proposals"] = trading.proposals_view(rt)
         data["calibration"] = rt.calibration.metrics()
+        data["active_bets"] = _active_bets(rt)
+        data["bet_history"] = list(reversed(rt.bet_history))[:25]
         return JSONResponse(_json_safe(data))
 
     @app.get("/api/proposals")
@@ -147,6 +180,9 @@ _INDEX_HTML = """<!doctype html>
   table{width:100%;border-collapse:collapse;font-size:12px} td{padding:4px 6px;border-bottom:1px solid var(--line)}
   .feed div{padding:5px 2px;border-bottom:1px solid var(--line);font-size:12px}
   .feed .tg{display:inline-block;min-width:62px;color:var(--mut)}
+  .betrow{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .betrow:last-child{border-bottom:none}
+  .pillsm{font-size:10px;padding:2px 7px;border-radius:6px;font-weight:800;letter-spacing:.3px}
   .empty{color:var(--mut);padding:10px 2px;font-size:13px}
   .flash{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#13855a;color:#fff;
     padding:10px 18px;border-radius:10px;font-weight:700;opacity:0;transition:opacity .2s;z-index:20}
@@ -172,11 +208,13 @@ _INDEX_HTML = """<!doctype html>
     </div>
     <div class="lbl" style="margin-top:18px">Active matches</div>
     <div id="matches" class="grid"></div>
+    <div class="lbl" style="margin-top:18px"><i class="ti ti-history" aria-hidden="true"></i> Bet history <span id="histpnl" class="sub"></span></div>
+    <div class="card" id="history"></div>
   </div>
   <div>
     <div class="card"><div class="lbl">Risk &amp; guardrails</div><div id="risk"></div></div>
-    <div class="card" style="margin-top:16px"><div class="lbl">Open positions</div>
-      <table id="positions"><tbody></tbody></table></div>
+    <div class="card" style="margin-top:16px"><div class="lbl">Active bets <span id="abcount" class="sub"></span></div>
+      <div id="activebets"></div></div>
     <div class="card" style="margin-top:16px"><div class="lbl">Activity</div><div id="feed" class="feed"></div></div>
     <div class="card" style="margin-top:16px"><div class="lbl">Model calibration</div><div id="calib"></div></div>
   </div>
@@ -280,10 +318,28 @@ function render(d){
     <div class="row"><span class="k">open exposure</span><span>$${f(r.total_open_exposure)}</span></div>
     <div class="row"><span class="k">fees paid</span><span>$${f(p.fees_paid)}</span></div>
     <div class="row"><span class="k">halted</span><span class="${r.halted?'neg':'pos'}">${r.halted?('YES — '+(r.halt_reason||'')):'no'}</span></div>`;
-  const pos=(p.open_positions)||{};
-  document.querySelector('#positions tbody').innerHTML=Object.keys(pos).length?
-    Object.entries(pos).map(([t,v])=>`<tr><td>${t}</td><td>${v.yes||0}Y / ${v.no||0}N</td></tr>`).join('')
-    :'<tr><td class="empty">none</td></tr>';
+  const ab=d.active_bets||[];
+  document.getElementById('abcount').textContent=ab.length?`(${ab.length})`:'';
+  document.getElementById('activebets').innerHTML=ab.length?ab.map(b=>`
+    <div class="betrow">
+      <div><b>${b.side==='back'?'Back':'Fade'} ${b.label}</b> <span class="sub">· ${b.contracts}${b.minute!=null?" · "+b.minute+"'":''}</span>
+        <div class="sub" style="font-size:11px">${b.match}</div></div>
+      <div style="text-align:right">
+        <span class="${(b.unrealized||0)>=0?'pos':'neg'}">${b.unrealized==null?'—':money(b.unrealized)}</span>
+        <div class="sub" style="font-size:11px">${b.value==null?'cost $'+f(b.cost):'val $'+f(b.value)}</div></div>
+    </div>`).join(''):'<div class="empty">no open bets</div>';
+  const hist=d.bet_history||[];
+  const tot=hist.reduce((s,b)=>s+(b.pnl||0),0);
+  document.getElementById('histpnl').textContent=hist.length?`· realized ${money(tot)}`:'';
+  document.getElementById('history').innerHTML=hist.length?
+    '<table style="width:100%"><tbody>'+hist.map(b=>`
+      <tr><td><b>${b.side==='back'?'Back':'Fade'} ${b.label}</b> <span class="sub">· ${b.contracts}</span>
+        <div class="sub" style="font-size:11px">${b.result}</div></td>
+      <td style="text-align:right;white-space:nowrap">
+        <span class="pillsm ${b.won?'ok':'bad'}">${b.won?'WON':'LOST'}</span>
+        <span class="${b.pnl>=0?'pos':'neg'}" style="margin-left:7px">${money(b.pnl)}</span>
+        <div class="sub" style="font-size:11px">${(b.ts||'').slice(11,19)}</div></td></tr>`).join('')+'</tbody></table>'
+    :'<div class="empty">No settled bets yet — they appear here when a match finishes.</div>';
   document.getElementById('feed').innerHTML=(d.recent_decisions||[]).slice(0,16).map(x=>`<div><span class="tg">${(x.ts||'').slice(11,19)}</span>${x.kind||''}: ${x.message||''}</div>`).join('')||'<div class="empty">—</div>';
   const c=d.calibration||{};
   document.getElementById('calib').innerHTML=`

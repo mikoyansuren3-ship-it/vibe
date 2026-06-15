@@ -132,6 +132,31 @@ def test_dashboard_approve_with_size(cfg, tmp_db):
     assert rt.portfolio.fees_paid > 0  # a fill happened at the chosen size
 
 
+async def _settle_some(rt):
+    """Run full autonomous matches until at least one bet settles into history."""
+    proc = TickProcessor(rt, decision_mode="autonomous")
+    feed = SimulatedMarketFeed(seed=7)
+    for seed in range(6):
+        st = MatchState(f"h-{seed}")
+        for m in simulate_full_match(seed=seed, match_id=f"h-{seed}"):
+            await proc.process(m, await feed.snapshots_for_match(m), st)
+        if rt.bet_history:
+            return
+
+
+def test_bet_history_and_active_bets(cfg, tmp_db):
+    rt = _runtime(cfg, tmp_db)
+    asyncio.run(_settle_some(rt))
+    assert rt.bet_history, "expected at least one settled bet in history"
+    b = rt.bet_history[0]
+    assert {"match", "label", "side", "contracts", "pnl", "won", "result"} <= set(b)
+
+    client = TestClient(create_app(rt))
+    s = client.get("/api/state").json()
+    assert isinstance(s["bet_history"], list) and len(s["bet_history"]) > 0
+    assert "active_bets" in s  # present (empty after settlement, populated mid-match)
+
+
 def test_dashboard_proposal_endpoints(cfg, tmp_db):
     rt = _runtime(cfg, tmp_db)
     asyncio.run(_seed_proposal(rt))

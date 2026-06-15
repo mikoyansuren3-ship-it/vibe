@@ -53,6 +53,8 @@ class Runtime:
     last_market_snaps: dict = None  # type: ignore[assignment]
     # Serializes order placement between the auto-loop and dashboard approvals.
     trade_lock: Any = None
+    # Settled bets (one per market that resolved), newest last. Powers "bet history".
+    bet_history: list = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         import asyncio
@@ -63,6 +65,8 @@ class Runtime:
             self.proposals = {}
         if self.last_market_snaps is None:
             self.last_market_snaps = {}
+        if self.bet_history is None:
+            self.bet_history = []
         if self.trade_lock is None:
             self.trade_lock = asyncio.Lock()
 

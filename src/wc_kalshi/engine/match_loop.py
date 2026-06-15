@@ -14,6 +14,7 @@ from ..features.engineer import match_features
 from ..logging_setup import get_logger
 from ..market.implied import implied_from_markets
 from ..models.schemas import MarketSnapshot, MatchSnapshot, Outcome, Probabilities
+from ..util import utcnow
 
 if TYPE_CHECKING:
     from .builders import Runtime
@@ -200,14 +201,43 @@ class TickProcessor:
     def _settle(self, match, mstate) -> None:
         rt = self.rt
         outcome = realized_outcome(match)
-        delta = rt.portfolio.settle_match(match.match_id, outcome)
+        result = f"{match.home_team} {match.home_score}-{match.away_score} {match.away_team}"
+        # Settle each open market for this match, recording a bet-history entry per market.
+        delta = 0.0
+        for ticker, pos in list(rt.portfolio.positions.items()):
+            if pos.match_id != match.match_id:
+                continue
+            back = pos.yes_contracts >= pos.no_contracts
+            contracts = pos.yes_contracts if back else pos.no_contracts
+            label = (
+                match.home_team
+                if pos.outcome is Outcome.HOME
+                else match.away_team
+                if pos.outcome is Outcome.AWAY
+                else "Draw"
+            )
+            pnl = rt.portfolio.settle_market(ticker, yes_won=(pos.outcome is outcome))
+            delta += pnl
+            rt.bet_history.append(
+                {
+                    "ts": utcnow().isoformat(),
+                    "match": f"{match.home_team} v {match.away_team}",
+                    "label": label,
+                    "side": "back" if back else "fade",
+                    "contracts": contracts,
+                    "result": f"{result} -> {outcome.value}",
+                    "pnl": round(pnl, 2),
+                    "won": pnl > 0,
+                }
+            )
+        rt.bet_history[:] = rt.bet_history[-200:]
         rt.risk.record_realized_pnl(delta, match_id=match.match_id)
         if mstate.first_prob is not None:
             rt.calibration.add(mstate.first_prob, outcome)
         mstate.settled = True
         rt.audit.log(
             "settlement",
-            f"{match.home_team} {match.home_score}-{match.away_score} {match.away_team} -> {outcome.value}, realized {delta:+.2f}",
+            f"{result} -> {outcome.value}, realized {delta:+.2f}",
             match_id=match.match_id,
             realized=delta,
         )
