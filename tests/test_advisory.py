@@ -157,6 +157,17 @@ def test_bet_history_and_active_bets(cfg, tmp_db):
     assert "active_bets" in s  # present (empty after settlement, populated mid-match)
 
 
+def test_equity_curve_and_session_stats(cfg, tmp_db):
+    rt = _runtime(cfg, tmp_db)
+    asyncio.run(_settle_some(rt))  # full matches -> equity samples + settled bets
+    assert len(rt.equity_curve) >= 1
+    client = TestClient(create_app(rt))
+    eq = client.get("/api/equity").json()
+    assert isinstance(eq, list) and len(eq) >= 1 and "equity" in eq[0]
+    stats = client.get("/api/state").json()["stats"]
+    assert stats["n_bets"] >= 1 and "win_rate" in stats and "best" in stats
+
+
 def test_dashboard_proposal_endpoints(cfg, tmp_db):
     rt = _runtime(cfg, tmp_db)
     asyncio.run(_seed_proposal(rt))

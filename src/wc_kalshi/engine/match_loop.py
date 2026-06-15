@@ -52,6 +52,7 @@ class TickProcessor:
         self.persist = persist  # backtests set False to skip per-row DB writes
         # autonomous = auto-execute; advisory = queue proposals for human approval
         self.decision_mode = decision_mode
+        self._last_eq = 0.0  # monotonic time of last equity-curve sample
 
     async def process(
         self, match: MatchSnapshot, market_snaps: list[MarketSnapshot], mstate: MatchState
@@ -93,6 +94,7 @@ class TickProcessor:
         # 5) Mark-to-market across the WHOLE open book (all matches) + daily-loss guardrail
         rt.last_mids.update(mids)
         rt.risk.update_unrealized(rt.portfolio.unrealized_pnl(rt.last_mids))
+        self._sample_equity(rt)
 
         # 6) Settlement
         if match.period.is_finished and not mstate.settled:
@@ -171,6 +173,25 @@ class TickProcessor:
         if n_fills:
             mstate.n_fills += n_fills
             mstate.last_trade_minute[ticker] = match.minute
+
+    def _sample_equity(self, rt) -> None:
+        """Append a point to the equity ring buffer (live only, throttled to ~5s)."""
+        if not self.persist:  # backtests don't need the live curve
+            return
+        import time
+
+        now = time.monotonic()
+        if now - self._last_eq < 5.0:
+            return
+        self._last_eq = now
+        rt.equity_curve.append(
+            {
+                "ts": utcnow().isoformat(),
+                "equity": round(rt.portfolio.equity(rt.last_mids), 2),
+                "realized": round(rt.portfolio.realized_pnl, 2),
+                "unrealized": round(rt.portfolio.unrealized_pnl(rt.last_mids), 2),
+            }
+        )
 
     def _alerts(self, match, mstate, edges) -> None:
         rt = self.rt

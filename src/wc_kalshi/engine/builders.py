@@ -55,12 +55,17 @@ class Runtime:
     trade_lock: Any = None
     # Settled bets (one per market that resolved), newest last. Powers "bet history".
     bet_history: list = None  # type: ignore[assignment]
+    # Equity time-series (ring buffer of {ts, equity, realized, unrealized}) for the curve.
+    equity_curve: Any = None
 
     def __post_init__(self) -> None:
         import asyncio
+        from collections import deque
 
         if self.last_mids is None:
             self.last_mids = {}
+        if self.equity_curve is None:
+            self.equity_curve = deque(maxlen=2000)
         if self.proposals is None:
             self.proposals = {}
         if self.last_market_snaps is None:

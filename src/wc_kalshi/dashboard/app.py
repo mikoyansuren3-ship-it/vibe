@@ -66,6 +66,24 @@ def _active_bets(rt: "Runtime") -> list[dict[str, Any]]:
     return rows
 
 
+def _session_stats(rt: "Runtime") -> dict[str, Any]:
+    """Aggregate performance stats from settled bet history."""
+    h = rt.bet_history
+    n = len(h)
+    pnls = [b.get("pnl", 0.0) for b in h]
+    wins = sum(1 for b in h if b.get("won"))
+    realized = sum(pnls)
+    return {
+        "n_bets": n,
+        "wins": wins,
+        "win_rate": round(wins / n, 3) if n else None,
+        "realized": round(realized, 2),
+        "avg_pnl": round(realized / n, 2) if n else None,
+        "best": round(max(pnls), 2) if pnls else None,
+        "worst": round(min(pnls), 2) if pnls else None,
+    }
+
+
 def create_app(rt: "Runtime", orchestrator: "Orchestrator | None" = None) -> FastAPI:
     app = FastAPI(title="World Cup × Kalshi — In-Play Edge", version="0.3.0")
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -85,7 +103,12 @@ def create_app(rt: "Runtime", orchestrator: "Orchestrator | None" = None) -> Fas
         data["calibration"] = rt.calibration.metrics()
         data["active_bets"] = _active_bets(rt)
         data["bet_history"] = list(reversed(rt.bet_history))[:25]
+        data["stats"] = _session_stats(rt)
         return JSONResponse(_json_safe(data))
+
+    @app.get("/api/equity")
+    async def equity() -> JSONResponse:
+        return JSONResponse(_json_safe(list(rt.equity_curve)))
 
     @app.get("/api/proposals")
     async def proposals() -> JSONResponse:
