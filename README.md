@@ -22,7 +22,7 @@ wck doctor                       # show resolved config + safety checks
 wck backtest --matches 200       # evaluate the strategy on synthetic matches
 wck run --matches 3 --dashboard  # live paper-trading loop + web dashboard
 #   -> open http://127.0.0.1:8000
-pytest -q                        # 79 tests, fully offline
+pytest -q                        # 101 tests, fully offline
 ```
 
 Everything above runs against a deterministic **match simulator** and a **simulated
@@ -163,6 +163,29 @@ DB table, so any trade can be explained after the fact.
 
 ---
 
+## Dashboard
+
+A no-build web app (`dashboard/static/{index.html,styles.css,app.js,charts.js}`) served by
+FastAPI; open `http://127.0.0.1:8000` after `wck run --dashboard`.
+
+- **Live view** — active matches (model vs market 1X2, xG, red cards, edges), pending
+  proposals with Approve/Reject + a size stepper, active bets (live unrealized P&L), and
+  bet history (WON/LOST + realized P&L).
+- **Performance analytics** — equity curve, session stats (win rate, best/worst, …), and a
+  model-calibration reliability chart (Chart.js via CDN, with a graceful offline fallback).
+- **Real-time** — server-sent events (`/api/stream`) push instant refreshes + toasts;
+  a heartbeat shows liveness; polling is the fallback.
+- **Match drill-down** — click a match for model-vs-market and cumulative-xG charts over the
+  game, plus lineups / formations / injuries (API-Football).
+- **Polish** — light/dark toggle, toast + optional sound alerts, one-click kill switch.
+- **Notifications** — opt-in Discord / Telegram / email pushes for goals, red cards,
+  proposals, fills, and guardrail trips (`config.alerts.*` + env secrets).
+
+JSON API: `/api/state`, `/api/equity`, `/api/calibration`, `/api/matches/{id}/history`,
+`/api/stream` (SSE), `/api/proposals` (+ `/{id}/approve|reject`), `/api/kill`.
+
+---
+
 ## Backtest / replay
 
 The harness runs the **same** `TickProcessor` the live loop uses, so *what you backtest
@@ -211,14 +234,14 @@ src/wc_kalshi/
   edge/                edge detector
   risk/                fractional-Kelly sizing + guardrails/kill switch
   execution/           paper / Kalshi executors, portfolio, audit
-  engine/              wiring, per-tick processor, async orchestrator, runtime state
-  observability/       alerter
-  dashboard/           FastAPI app + live UI
+  engine/              wiring, per-tick processor + trade exec, async orchestrator, state
+  observability/       alerter (console / webhook / Discord / Telegram / email)
+  dashboard/           FastAPI app + static/ front-end (html/css/app.js/charts.js)
   backtest/            replay/synthetic harness + report
   cli.py               `wck` entrypoint
-config/default.yaml    non-secret config
+config/default.yaml    non-secret config (advisory.yaml / auto.yaml = the two paths)
 docs/research.md       Phase-0 research (endpoints, auth, fees, providers) with citations
-tests/                 79 offline tests + sample payloads
+tests/                 101 offline tests + sample payloads
 ```
 
 ---
@@ -226,7 +249,7 @@ tests/                 79 offline tests + sample payloads
 ## Testing
 
 ```bash
-pytest -q          # 79 tests, no network, no keys
+pytest -q          # 101 tests, no network, no keys
 ```
 
 Covers the model math, Poisson/Dixon–Coles, de-vigging, **edge calc, sizing, guardrail
@@ -254,7 +277,7 @@ All factual claims about the above are cited in [`docs/research.md`](docs/resear
 
 **Works end-to-end (paper):** ingestion → features → model → de-vig → edge → ¼-Kelly
 sizing → guardrails + kill switch → paper execution → portfolio settlement → DB persist
-→ dashboard → alerts → backtest/replay → 79 passing tests.
+→ dashboard → alerts → backtest/replay → 101 passing tests.
 
 **Implemented but only fully exercisable with credentials (`demo`/`live`):** Kalshi REST
 client, RSA-PSS signing, runtime market discovery, and the Kalshi executor. These are
