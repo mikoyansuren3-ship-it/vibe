@@ -1,0 +1,29 @@
+# ===========================================================================
+# AUTONOMOUS path — the engine EXECUTES actionable edges itself (no human step).
+#   WCK_CONFIG=config/auto.yaml wck run --autonomous --dashboard
+#   -> http://127.0.0.1:8001   (different port so it can run alongside advisory)
+# Layered on top of config/default.yaml. Secrets come from env (.env). Point this
+# path at its OWN Kalshi account. Defaults to paper; WCK_MODE=demo|live to go further.
+# ===========================================================================
+mode: paper
+
+execution:
+  decision_mode: autonomous
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8001
+
+football:
+  provider: apifootball         # real World Cup data (needs APIFOOTBALL_KEY)
+  apifootball_league_id: 1       # FIFA World Cup only
+  poll_interval_seconds: 15
+
+# TIGHTER limits than advisory — no human approves these, so cap risk harder.
+risk:
+  starting_bankroll: 1000.0
+  kelly_fraction: 0.15
+  max_position_per_market: 25
+  max_exposure_per_match: 50.0
+  max_total_open_exposure: 150.0
+  max_daily_loss: 50.0

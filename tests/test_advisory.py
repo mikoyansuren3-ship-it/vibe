@@ -108,6 +108,30 @@ async def test_autonomous_executes_and_makes_no_proposals(cfg, tmp_db):
     await rt.aclose()
 
 
+async def test_approve_with_size_override(cfg, tmp_db):
+    rt = _runtime(cfg, tmp_db)
+    p = await _seed_proposal(rt)
+    small = max(1, p.contracts // 3)  # well under the caps -> not clamped
+    ok, msg = await trading.execute_proposal(rt, p.id, contracts=small, persist=False)
+    assert ok, msg
+    pos = rt.portfolio.positions.get(p.market_ticker)
+    booked = pos.yes_contracts if p.action.value == "buy" else pos.no_contracts
+    assert booked == small  # executed the size we chose, not the proposed size
+    await rt.aclose()
+
+
+def test_dashboard_approve_with_size(cfg, tmp_db):
+    rt = _runtime(cfg, tmp_db)
+    asyncio.run(_seed_proposal(rt))
+    client = TestClient(create_app(rt))
+    pend = client.get("/api/proposals").json()["pending"]
+    pid, proposed = pend[0]["id"], pend[0]["contracts"]
+    small = max(1, proposed // 4)
+    r = client.post(f"/api/proposals/{pid}/approve?contracts={small}").json()
+    assert r["ok"] is True
+    assert rt.portfolio.fees_paid > 0  # a fill happened at the chosen size
+
+
 def test_dashboard_proposal_endpoints(cfg, tmp_db):
     rt = _runtime(cfg, tmp_db)
     asyncio.run(_seed_proposal(rt))

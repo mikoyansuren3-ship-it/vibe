@@ -54,8 +54,8 @@ def create_app(rt: "Runtime", orchestrator: "Orchestrator | None" = None) -> Fas
         return JSONResponse(_json_safe(trading.proposals_view(rt)))
 
     @app.post("/api/proposals/{pid}/approve")
-    async def approve(pid: str) -> JSONResponse:
-        ok, message = await trading.execute_proposal(rt, pid)
+    async def approve(pid: str, contracts: int | None = None) -> JSONResponse:
+        ok, message = await trading.execute_proposal(rt, pid, contracts=contracts)
         return JSONResponse({"ok": ok, "message": message})
 
     @app.post("/api/proposals/{pid}/reject")
@@ -132,6 +132,10 @@ _INDEX_HTML = """<!doctype html>
   .approve{background:#0e6b46;border-color:#19a06b;color:#eafff5} .approve:hover{background:#13855a}
   .reject{background:#2a0e15;border-color:#7a2333;color:#ffd7de} .reject:hover{background:#3a121c}
   .btn:disabled{opacity:.5;cursor:default}
+  .sizer{display:flex;align-items:center;gap:8px;margin:2px 0 6px}
+  .step{width:30px;height:30px;border-radius:9px;border:1px solid var(--line);background:#0c1320;color:var(--ink);font-weight:800;font-size:16px;cursor:pointer}
+  .step:hover{background:#16202e}
+  .szin{width:72px;height:30px;background:#0c1320;border:1px solid var(--line);border-radius:9px;color:var(--ink);text-align:center;font-weight:800;font-size:14px}
   /* matches */
   .teams{font-weight:700;font-size:14px} .min{float:right;color:var(--mut);font-weight:600}
   .score{font-size:20px;font-weight:800;margin:3px 0}
@@ -189,17 +193,29 @@ function bar(p,colors){if(!p)return '<div class="empty">no market quote</div>';
   const s=[['home',p.home],['draw',p.draw],['away',p.away]];
   return '<div class="bar">'+s.map((x,i)=>`<div class="seg" style="width:${(x[1]*100).toFixed(0)}%;background:${colors[i]}">${(x[1]*100).toFixed(0)}</div>`).join('')+'</div>';}
 async function act(id,kind){
-  if(busy[id])return; busy[id]=1; render(window._last);
-  try{const r=await (await fetch(`/api/proposals/${id}/${kind}`,{method:'POST'})).json();
+  if(busy[id])return;
+  let url=`/api/proposals/${id}/${kind}`;
+  if(kind==='approve'){const el=document.getElementById('sz-'+id); const n=el?Math.max(1,parseInt(el.value)||1):0; if(n)url+=`?contracts=${n}`;}
+  busy[id]=1; render(window._last);
+  try{const r=await (await fetch(url,{method:'POST'})).json();
     flash(kind==='approve'?(r.ok?'✓ Order placed':('✗ '+(r.message||'rejected'))):'Dismissed', kind==='approve'&&!r.ok);
   }catch(e){flash('request failed',true)}
-  delete busy[id]; tick();
+  delete busy[id]; delete sizes[id]; tick();
 }
 async function kill(){if(!confirm('Engage KILL SWITCH? Halts all new trading immediately.'))return; await fetch('/api/kill',{method:'POST'}); flash('Kill switch engaged',true); tick();}
 function outLabel(p){return p.outcome==='home'?p.home_team:p.outcome==='away'?p.away_team:'Draw';}
+let sizes={};  // user-adjusted contract counts per proposal id (survive polls)
+function adjust(id,delta){const el=document.getElementById('sz-'+id);if(!el)return;
+  sizes[id]=Math.max(1,(parseInt(el.value)||1)+delta); el.value=sizes[id]; recalc(id);}
+function recalc(id){const el=document.getElementById('sz-'+id);if(!el)return;
+  const n=Math.max(1,parseInt(el.value)||1); sizes[id]=n;
+  const cost=+el.dataset.cost, edge=+el.dataset.edge;
+  const ev=document.getElementById('ev-'+id), ml=document.getElementById('ml-'+id);
+  if(ev)ev.textContent=money(n*edge); if(ml)ml.textContent=money(-(n*cost));}
 function propCard(p){
   const back=p.action==='buy';
-  const price=back?p.limit_price_cents:p.limit_price_cents;
+  const n=sizes[p.id]!=null?sizes[p.id]:p.contracts;
+  const step=Math.max(1,Math.round(p.contracts*0.1));
   return `<div class="prop">
     <div class="top">
       <div><div class="matchup">${p.home_team} v ${p.away_team}</div>
@@ -207,13 +223,21 @@ function propCard(p){
       <div class="edgechip">edge ${(p.net_edge*100).toFixed(1)}%</div>
     </div>
     <div class="verb"><span class="${back?'b':'f'}">${back?'BACK':'FADE'} ${outLabel(p)}</span>
-      <span class="sub" style="font-size:13px"> · ${p.contracts} @ ${price}¢</span></div>
+      <span class="sub" style="font-size:13px"> @ ${p.limit_price_cents}¢</span></div>
     <div class="thesis">${p.thesis||''}</div>
+    <div class="sizer">
+      <span class="sub">size</span>
+      <button class="step" onclick="adjust('${p.id}',-${step})" aria-label="decrease">−</button>
+      <input id="sz-${p.id}" class="szin" type="number" min="1" value="${n}"
+        data-cost="${p.cost_per_contract}" data-edge="${p.net_edge}" oninput="recalc('${p.id}')">
+      <button class="step" onclick="adjust('${p.id}',${step})" aria-label="increase">+</button>
+      <span class="sub">contracts (cap applies)</span>
+    </div>
     <div class="tiles">
       <div class="tile"><span>model</span><b>${pct(p.model_prob)}</b></div>
       <div class="tile"><span>market</span><b>${pct(p.market_prob)}</b></div>
-      <div class="tile"><span>exp. value</span><b class="pos">${money(p.expected_value)}</b></div>
-      <div class="tile"><span>max loss</span><b class="neg">${money(-Math.abs(p.max_loss))}</b></div>
+      <div class="tile"><span>exp. value</span><b id="ev-${p.id}" class="pos">${money(n*p.net_edge)}</b></div>
+      <div class="tile"><span>max loss</span><b id="ml-${p.id}" class="neg">${money(-(n*p.cost_per_contract))}</b></div>
     </div>
     <div class="btns">
       <button class="btn approve" ${busy[p.id]?'disabled':''} onclick="act('${p.id}','approve')">✓ Approve</button>

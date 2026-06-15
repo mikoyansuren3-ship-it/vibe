@@ -1,0 +1,32 @@
+# ===========================================================================
+# ADVISORY path — the engine PROPOSES trades; you Approve/Reject in the dashboard.
+#   WCK_CONFIG=config/advisory.yaml wck run --advisory --dashboard
+#   -> http://127.0.0.1:8000
+# Layered on top of config/default.yaml. Secrets still come from env (.env).
+# Point this path at its own Kalshi account via that run's KALSHI_API_KEY_ID /
+# KALSHI_PRIVATE_KEY_PATH. Defaults to paper; set WCK_MODE=demo|live to go further.
+# ===========================================================================
+mode: paper
+
+execution:
+  decision_mode: advisory
+  proposal_ttl_seconds: 150     # a pending proposal stays actionable for 2.5 min
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8000
+
+football:
+  provider: apifootball         # real World Cup data (needs APIFOOTBALL_KEY)
+  apifootball_league_id: 1       # FIFA World Cup only
+  poll_interval_seconds: 15
+
+# Conservative limits — a human still approves each trade here, so these can be a
+# touch higher than the autonomous path. Tune to how you fund this account.
+risk:
+  starting_bankroll: 1000.0
+  kelly_fraction: 0.25
+  max_position_per_market: 50
+  max_exposure_per_match: 100.0
+  max_total_open_exposure: 300.0
+  max_daily_loss: 100.0

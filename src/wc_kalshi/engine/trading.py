@@ -210,8 +210,14 @@ async def place_and_book(
     return result, n_fills
 
 
-async def execute_proposal(rt: "Runtime", proposal_id: str, *, persist: bool = True) -> tuple[bool, str]:
-    """Approve + execute a pending proposal (re-checking risk at execution time)."""
+async def execute_proposal(
+    rt: "Runtime", proposal_id: str, *, contracts: int | None = None, persist: bool = True
+) -> tuple[bool, str]:
+    """Approve + execute a pending proposal (re-checking risk at execution time).
+
+    ``contracts`` optionally overrides the proposed size (size up/down from the UI);
+    the risk manager still clamps it to the configured limits.
+    """
     p: TradeProposal | None = rt.proposals.get(proposal_id)
     if p is None:
         return False, "unknown proposal"
@@ -222,11 +228,12 @@ async def execute_proposal(rt: "Runtime", proposal_id: str, *, persist: bool = T
         p.risk_note = "trading halted / kill switch engaged"
         return False, "trading not allowed"
 
+    requested = p.contracts if contracts is None else max(1, int(contracts))
     rd = rt.risk.pre_trade_check(
         match_id=p.match_id,
         market_ticker=p.market_ticker,
         action=p.action,
-        contracts=p.contracts,
+        contracts=requested,
         cost_per_contract=p.cost_per_contract,
         price=p.limit_price_cents / 100.0,
     )

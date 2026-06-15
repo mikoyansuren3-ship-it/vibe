@@ -2,7 +2,20 @@
 
 import pytest
 
-from wc_kalshi.config import ConfigError, RunMode, load_config
+from wc_kalshi.config import REPO_ROOT, ConfigError, RunMode, load_config
+
+
+def test_advisory_and_auto_config_files(monkeypatch):
+    monkeypatch.setenv("WCK_CONFIG", str(REPO_ROOT / "config" / "advisory.yaml"))
+    adv = load_config(load_env=False)
+    assert adv.execution.decision_mode == "advisory"
+    assert adv.dashboard.port == 8000
+
+    monkeypatch.setenv("WCK_CONFIG", str(REPO_ROOT / "config" / "auto.yaml"))
+    auto = load_config(load_env=False)
+    assert auto.execution.decision_mode == "autonomous"
+    assert auto.dashboard.port == 8001
+    assert auto.risk.kelly_fraction == 0.15  # tighter than advisory
 
 
 def test_paper_is_default_and_boots():
