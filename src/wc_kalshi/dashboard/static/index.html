@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>World Cup × Kalshi — In-Play Edge</title>
+<link rel="stylesheet" href="/static/styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1><span class="dot">●</span> World Cup × Kalshi <span class="sub" style="font-weight:500">In-Play Edge</span></h1>
+  <span id="runmode" class="pill info">—</span>
+  <span id="decision" class="pill acc">—</span>
+  <span id="status" class="pill">—</span>
+  <span class="heartbeat" id="heartbeat"><span class="led"></span><span id="hbtext">connecting…</span></span>
+  <span class="spacer"></span>
+  <div class="stat"><b id="equity">—</b><span>equity</span></div>
+  <div class="stat"><b id="pnl">—</b><span>P&amp;L</span></div>
+  <div class="stat"><b id="open">—</b><span>open risk</span></div>
+  <button class="iconbtn" id="soundBtn" title="Toggle alert sound" aria-label="Toggle alert sound">🔔</button>
+  <button class="iconbtn" id="themeBtn" title="Toggle light/dark" aria-label="Toggle theme">🌙</button>
+  <button class="kill" id="killBtn">■ KILL</button>
+</header>
+
+<div class="wrap">
+  <!-- main column -->
+  <div>
+    <div id="analytics"></div>
+
+    <div id="decisionsWrap" class="section" hidden>
+      <div class="lbl">⚡ Pending decisions <span id="propcount" class="sub"></span></div>
+      <div id="proposals"></div>
+    </div>
+
+    <div class="section">
+      <div class="lbl" style="margin-top:18px">Active matches</div>
+      <div id="matches" class="grid"></div>
+    </div>
+
+    <div class="section">
+      <div class="lbl" style="margin-top:18px">📜 Bet history <span id="histpnl" class="sub"></span></div>
+      <div class="card" id="history"></div>
+    </div>
+  </div>
+
+  <!-- sidebar -->
+  <div>
+    <div class="card"><div class="lbl">Risk &amp; guardrails</div><div id="risk"></div></div>
+    <div class="card"><div class="lbl">Active bets <span id="abcount" class="sub"></span></div><div id="activebets"></div></div>
+    <div class="card"><div class="lbl">Activity</div><div id="feed" class="feed"></div></div>
+    <div class="card"><div class="lbl">Model calibration</div><div id="calib"></div></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<div class="modal" id="modal" hidden>
+  <div class="panel">
+    <span class="x" id="modalClose">✕</span>
+    <div id="modalBody"></div>
+  </div>
+</div>
+</body>
+</html>
