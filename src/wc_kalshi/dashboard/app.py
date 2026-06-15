@@ -251,7 +251,7 @@ function render(d){
   document.getElementById('decision').textContent=dec;
   const r=d.risk||{}, p=d.portfolio||{};
   const st=document.getElementById('status');
-  st.textContent=r.kill_switch?'KILL SWITCH':(r.halted?'HALTED':'live');
+  st.textContent=r.kill_switch?'KILLED':(r.halted?'HALTED':'running');
   st.className='pill '+((!r.halted&&!r.kill_switch)?'ok':'bad');
   document.getElementById('equity').textContent=f(p.equity);
   const pnl=(p.realized_pnl||0)+(p.unrealized_pnl||0);
