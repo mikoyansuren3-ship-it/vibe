@@ -131,13 +131,9 @@ def make_or_update_proposal(
         **fields,
     )
     rt.proposals[proposal.id] = proposal
-    rt.state.add_decision(
-        {
-            "kind": "proposal",
-            "match_id": match.match_id,
-            "message": f"PROPOSED {edge.action.value} {contracts} {ticker} @ {decision.limit_price_cents}c (edge {edge.net_edge:+.3f})",
-        }
-    )
+    msg = f"PROPOSED {edge.action.value} {contracts} {ticker} @ {decision.limit_price_cents}c (edge {edge.net_edge:+.3f})"
+    rt.state.add_decision({"kind": "proposal", "match_id": match.match_id, "message": msg})
+    rt.bus.publish(Event(EventType.ALERT, {"kind": "proposal", "message": msg}, match.match_id))
     if persist:
         rt.audit.log(
             "proposal", thesis, match_id=match.match_id, proposal_id=proposal.id,
@@ -200,13 +196,9 @@ async def place_and_book(
                 if persist:
                     _persist_fill(rt, fill)
                 n_fills += 1
-            rt.state.add_decision(
-                {
-                    "kind": "fill",
-                    "match_id": match_id,
-                    "message": f"{action.value} {result.filled_contracts} {market_ticker} @ {limit_price_cents}c",
-                }
-            )
+            fmsg = f"{action.value} {result.filled_contracts} {market_ticker} @ {limit_price_cents}c"
+            rt.state.add_decision({"kind": "fill", "match_id": match_id, "message": fmsg})
+            rt.bus.publish(Event(EventType.ALERT, {"kind": "fill", "message": fmsg}, match_id))
     return result, n_fills
 
 

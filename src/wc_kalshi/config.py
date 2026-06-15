@@ -136,9 +136,14 @@ class AlertsSection(BaseModel):
     enabled: bool = True
     console: bool = True
     webhook: bool = False
+    discord: bool = False
+    telegram: bool = False
+    email: bool = False
     on_goal: bool = True
     on_red_card: bool = True
     on_guardrail: bool = True
+    on_proposal: bool = True
+    on_fill: bool = True
     divergence_threshold: float = 0.08
 
 
@@ -151,6 +156,15 @@ class Secrets(BaseModel):
     apifootball_key: str | None = None
     thestatsapi_key: str | None = None
     alerts_webhook_url: str | None = None
+    discord_webhook_url: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    email_from: str | None = None
+    email_to: str | None = None
     allow_live: bool = False
 
     def kalshi_private_key(self) -> str | None:
@@ -265,6 +279,15 @@ def _load_secrets() -> Secrets:
         apifootball_key=os.getenv("APIFOOTBALL_KEY") or None,
         thestatsapi_key=os.getenv("THESTATSAPI_KEY") or None,
         alerts_webhook_url=os.getenv("ALERTS_WEBHOOK_URL") or None,
+        discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL") or None,
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN") or None,
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID") or None,
+        smtp_host=os.getenv("SMTP_HOST") or None,
+        smtp_port=int(os.getenv("SMTP_PORT")) if os.getenv("SMTP_PORT") else None,
+        smtp_user=os.getenv("SMTP_USER") or None,
+        smtp_password=os.getenv("SMTP_PASSWORD") or None,
+        email_from=os.getenv("EMAIL_FROM") or None,
+        email_to=os.getenv("EMAIL_TO") or None,
         allow_live=_truthy(os.getenv("WCK_ALLOW_LIVE")),
     )
 

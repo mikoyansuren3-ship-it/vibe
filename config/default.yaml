@@ -93,7 +93,12 @@ alerts:
   enabled: true
   console: true
   webhook: false              # POST to ALERTS_WEBHOOK_URL if true
+  discord: false              # POST to DISCORD_WEBHOOK_URL if true
+  telegram: false             # send via TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID if true
+  email: false                # send via SMTP_* env if true
   on_goal: true
   on_red_card: true
   on_guardrail: true
+  on_proposal: true
+  on_fill: true
   divergence_threshold: 0.08  # alert when |model - market| exceeds this
