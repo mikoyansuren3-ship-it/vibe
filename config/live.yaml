@@ -1,0 +1,31 @@
+# ===========================================================================
+# ⚠️  REAL MONEY · PRODUCTION KALSHI.  Read RUNBOOK §7 before using.
+#
+# This file is DISARMED. On its own it will NOT trade: `live` mode also requires
+#   WCK_MODE=live  +  WCK_ALLOW_LIVE=true  (env)  AND  execution.live_confirmed: true
+# (below). Flipping live_confirmed to true is a deliberate, separate act — yours to make.
+#
+# Defaults here are deliberately tiny + advisory (you approve every real-money order
+# in the dashboard). Tune the risk caps to whatever you actually fund the account with.
+# ===========================================================================
+mode: live
+
+kalshi:
+  environment: prod            # hit production URLs (not the demo sandbox)
+
+execution:
+  decision_mode: advisory      # YOU approve each real-money order in the dashboard
+  live_confirmed: false        # <-- set to true to ARM live trading (deliberate)
+
+football:
+  provider: apifootball        # real World Cup data (needs APIFOOTBALL_KEY)
+  apifootball_league_id: 1     # FIFA World Cup only
+  poll_interval_seconds: 15
+
+risk:                          # conservative real-money caps — match to your funding
+  starting_bankroll: 25.0      # set to your actual funded amount
+  kelly_fraction: 0.10
+  max_position_per_market: 10
+  max_exposure_per_match: 20.0
+  max_total_open_exposure: 40.0
+  max_daily_loss: 15.0
