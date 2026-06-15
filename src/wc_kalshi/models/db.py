@@ -262,3 +262,16 @@ class Database:
                 .all()
             )
             return [MarketSnapshot.model_validate(r.data) for r in rows]
+
+    def iter_edges(self, match_id: str) -> list[EdgeSignal]:
+        with self.session() as s:
+            rows = (
+                s.execute(
+                    select(EdgeRow)
+                    .where(EdgeRow.match_id == match_id)
+                    .order_by(EdgeRow.ts, EdgeRow.id)
+                )
+                .scalars()
+                .all()
+            )
+            return [EdgeSignal.model_validate(r.data) for r in rows]

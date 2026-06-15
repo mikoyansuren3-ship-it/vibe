@@ -168,6 +168,31 @@ def test_equity_curve_and_session_stats(cfg, tmp_db):
     assert stats["n_bets"] >= 1 and "win_rate" in stats and "best" in stats
 
 
+def test_match_history_endpoint(cfg, tmp_db):
+    rt = _runtime(cfg, tmp_db)
+
+    async def run():
+        proc = TickProcessor(rt, decision_mode="autonomous")
+        feed = SimulatedMarketFeed(seed=7)
+        st = MatchState("hist-1")
+        for m in simulate_full_match(seed=3, match_id="hist-1"):
+            await proc.process(m, await feed.snapshots_for_match(m), st)
+
+    asyncio.run(run())
+    client = TestClient(create_app(rt))
+    h = client.get("/api/matches/hist-1/history").json()
+    assert h["match_id"] == "hist-1"
+    assert len(h["series"]) > 0
+    assert "model" in h["series"][0] and "market" in h["series"][0]
+
+
+def test_realtime_and_analytics_routes_registered(cfg, tmp_db):
+    app = create_app(_runtime(cfg, tmp_db))
+    paths = {getattr(r, "path", None) for r in app.routes}
+    for p in ("/api/stream", "/api/equity", "/api/matches/{match_id}/history"):
+        assert p in paths
+
+
 def test_dashboard_proposal_endpoints(cfg, tmp_db):
     rt = _runtime(cfg, tmp_db)
     asyncio.run(_seed_proposal(rt))

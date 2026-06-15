@@ -8,12 +8,14 @@ Also exposes a one-click kill switch.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..engine import trading
@@ -66,6 +68,46 @@ def _active_bets(rt: "Runtime") -> list[dict[str, Any]]:
     return rows
 
 
+def _match_history(rt: "Runtime", match_id: str) -> dict[str, Any]:
+    """Per-tick time-series for a match: model + de-vigged market 1X2, score, cumulative xG.
+
+    Built from persisted ``edge_signals`` (model+market per outcome) joined to
+    ``match_snapshots`` (minute/score/xG) by second.
+    """
+    edges = rt.db.iter_edges(match_id)
+    snaps = rt.db.iter_match_snapshots(match_id)
+    snap_by_sec = {s.ts.replace(microsecond=0): s for s in snaps}
+
+    groups: dict[Any, dict[str, dict[str, float]]] = {}
+    order: list[Any] = []
+    for e in edges:
+        sec = e.ts.replace(microsecond=0)
+        if sec not in groups:
+            groups[sec] = {"model": {}, "market": {}}
+            order.append(sec)
+        groups[sec]["model"][e.outcome.value] = round(e.model_prob, 4)
+        groups[sec]["market"][e.outcome.value] = round(e.market_prob, 4)
+
+    series: list[dict[str, Any]] = []
+    for sec in order:
+        g = groups[sec]
+        s = snap_by_sec.get(sec)
+        series.append(
+            {
+                "minute": s.minute if s else None,
+                "score": f"{s.home_score}-{s.away_score}" if s else None,
+                "xg": [round(s.home.xg, 2), round(s.away.xg, 2)] if s else None,
+                "model": g["model"],
+                "market": g["market"],
+            }
+        )
+    teams = None
+    if snaps:
+        teams = {"home": snaps[-1].home_team, "away": snaps[-1].away_team,
+                 "score": f"{snaps[-1].home_score}-{snaps[-1].away_score}"}
+    return {"match_id": match_id, "teams": teams, "series": series}
+
+
 def _session_stats(rt: "Runtime") -> dict[str, Any]:
     """Aggregate performance stats from settled bet history."""
     h = rt.bet_history
@@ -109,6 +151,29 @@ def create_app(rt: "Runtime", orchestrator: "Orchestrator | None" = None) -> Fas
     @app.get("/api/equity")
     async def equity() -> JSONResponse:
         return JSONResponse(_json_safe(list(rt.equity_curve)))
+
+    @app.get("/api/matches/{match_id}/history")
+    async def match_history(match_id: str) -> JSONResponse:
+        return JSONResponse(_json_safe(_match_history(rt, match_id)))
+
+    @app.get("/api/stream")
+    async def stream() -> StreamingResponse:
+        async def gen():
+            yield ": connected\n\n"
+            agen = rt.bus.stream()
+            try:
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(agen.__anext__(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield ": ping\n\n"  # keep-alive; EventSource ignores comments
+                        continue
+                    payload = {"type": ev.type.value, "match_id": ev.match_id, "ts": ev.ts}
+                    yield f"data: {json.dumps(payload)}\n\n"
+            finally:
+                await agen.aclose()
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.get("/api/proposals")
     async def proposals() -> JSONResponse:

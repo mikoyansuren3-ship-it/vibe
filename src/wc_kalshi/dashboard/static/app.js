@@ -5,7 +5,7 @@ const f = (x, d = 2) => (x == null || isNaN(x)) ? "—" : (+x).toFixed(d);
 const money = (x) => x == null ? "—" : (x >= 0 ? "+$" : "-$") + Math.abs(+x).toFixed(2);
 const pct = (x) => x == null ? "—" : Math.round(x * 100) + "%";
 const abbr = (t) => (t || "?").slice(0, 3).toUpperCase();
-const POLL_MS = 2000;
+const POLL_MS = 4000;  // SSE drives liveness; poll is the steady fallback
 
 // ---------- theme ----------
 function initTheme() {
@@ -172,7 +172,7 @@ function render(d) {
 
   // matches
   $("matches").innerHTML = (d.matches || []).map(m => `
-    <div class="card match" data-mid="${m.match_id}">
+    <div class="card match" data-mid="${m.match_id}" onclick="window.openMatch&&window.openMatch('${m.match_id}','${(m.home_team||'').replace(/'/g,'')}','${(m.away_team||'').replace(/'/g,'')}')">
       <div class="teams">${m.home_team} v ${m.away_team}<span class="min">${m.minute}' ${m.period || ""}</span></div>
       <div class="score">${m.score} <span class="sub" style="font-size:12px">xG ${f(m.xg && m.xg[0], 2)}–${f(m.xg && m.xg[1], 2)} · 🟥 ${(m.red_cards && m.red_cards[0]) || 0}/${(m.red_cards && m.red_cards[1]) || 0}</span></div>
       <div class="lbl" style="margin:9px 0 2px">Model 1X2</div>${bar(m.model, ["#34d99a", "#8499ad", "#54a8ff"])}
@@ -251,5 +251,20 @@ function boot() {
   tick();
   setInterval(tick, POLL_MS);
   setInterval(tickHeartbeat, 1000);
+  initSSE();
+}
+
+// Server-sent events: instant refresh on engine events; poll remains the fallback.
+let _sseDebounce = null;
+function initSSE() {
+  try {
+    const es = new EventSource("/api/stream");
+    es.onmessage = () => {
+      lastUpdate = Date.now();
+      if (_sseDebounce) return;
+      _sseDebounce = setTimeout(() => { _sseDebounce = null; tick(); }, 400);
+    };
+    es.onerror = () => {};  // EventSource auto-reconnects; polling covers gaps
+  } catch (e) {}
 }
 if (document.readyState !== "loading") boot(); else document.addEventListener("DOMContentLoaded", boot);

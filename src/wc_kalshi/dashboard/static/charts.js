@@ -95,6 +95,83 @@
     });
   }
 
+  // ---------- match drill-down ----------
+  let dlProb = null, dlXg = null, dlSeries = [], dlOut = "home";
+  function destroyDl() { if (dlProb) { dlProb.destroy(); dlProb = null; } if (dlXg) { dlXg.destroy(); dlXg = null; } }
+
+  window.openMatch = async function (mid, home, away) {
+    const modal = document.getElementById("modal"), body = document.getElementById("modalBody");
+    if (!modal || !body) return;
+    body.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div><div style="font-size:17px;font-weight:800">${home || ""} v ${away || ""}</div>
+          <div class="sub" id="dlScore"></div></div>
+        <div id="dlOutcomes"></div>
+      </div>
+      <div class="lbl" style="margin-top:14px">Model vs market — <span id="dlOutLabel">home</span></div>
+      <div class="chartbox tall"><canvas id="dlProbCanvas"></canvas></div>
+      <div class="lbl" style="margin-top:16px">Cumulative xG</div>
+      <div class="chartbox"><canvas id="dlXgCanvas"></canvas></div>
+      <div id="dlEmpty" class="empty" hidden>No time-series recorded for this match yet.</div>`;
+    modal.hidden = false;
+    destroyDl(); dlOut = "home";
+    let hist;
+    try { hist = await (await fetch(`/api/matches/${encodeURIComponent(mid)}/history`)).json(); }
+    catch (e) { document.getElementById("dlEmpty").hidden = false; return; }
+    dlSeries = (hist && hist.series) || [];
+    const sc = document.getElementById("dlScore");
+    if (sc && hist.teams) sc.textContent = `${hist.teams.score} · ${dlSeries.length} ticks`;
+    document.getElementById("dlOutcomes").innerHTML = ["home", "draw", "away"].map(o =>
+      `<button class="step" style="width:auto;padding:0 12px;margin-left:6px" onclick="window._dlSelect('${o}')">${o}</button>`).join("");
+    if (!dlSeries.length) { document.getElementById("dlEmpty").hidden = false; return; }
+    if (!hasChart()) { document.getElementById("dlEmpty").hidden = false;
+      document.getElementById("dlEmpty").textContent = "Charts need internet (Chart.js)."; return; }
+    drawXg(); window._dlSelect(dlOut);
+  };
+
+  window._dlSelect = function (o) {
+    dlOut = o;
+    const lab = document.getElementById("dlOutLabel"); if (lab) lab.textContent = o;
+    drawProb();
+  };
+
+  function dlLabels() { return dlSeries.map((s, i) => s.minute != null ? s.minute + "'" : String(i)); }
+  function drawProb() {
+    const cv = document.getElementById("dlProbCanvas"); if (!cv || !hasChart()) return;
+    const labels = dlLabels();
+    const model = dlSeries.map(s => (s.model || {})[dlOut]);
+    const market = dlSeries.map(s => (s.market || {})[dlOut]);
+    const grid = css("--line", "#21303f"), ink = css("--ink2", "#8da2b8");
+    if (dlProb) dlProb.destroy();
+    dlProb = new Chart(cv, {
+      type: "line",
+      data: { labels, datasets: [
+        { label: "model", data: model, borderColor: "#7b6cff", backgroundColor: "rgba(123,108,255,.10)", fill: true, tension: .25, pointRadius: 0, borderWidth: 2 },
+        { label: "market", data: market, borderColor: "#54a8ff", tension: .25, pointRadius: 0, borderWidth: 2, borderDash: [5, 4] }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { labels: { color: ink } } },
+        scales: { x: { ticks: { color: ink, maxTicksLimit: 8 }, grid: { color: grid } },
+                  y: { min: 0, max: 1, ticks: { color: ink }, grid: { color: grid } } } }
+    });
+  }
+  function drawXg() {
+    const cv = document.getElementById("dlXgCanvas"); if (!cv || !hasChart()) return;
+    const labels = dlLabels();
+    const h = dlSeries.map(s => s.xg ? s.xg[0] : null), a = dlSeries.map(s => s.xg ? s.xg[1] : null);
+    const grid = css("--line", "#21303f"), ink = css("--ink2", "#8da2b8");
+    if (dlXg) dlXg.destroy();
+    dlXg = new Chart(cv, {
+      type: "line",
+      data: { labels, datasets: [
+        { label: "home xG", data: h, borderColor: "#34d99a", tension: .25, pointRadius: 0, borderWidth: 2 },
+        { label: "away xG", data: a, borderColor: "#ffc24b", tension: .25, pointRadius: 0, borderWidth: 2 }] },
+      options: { responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { labels: { color: ink } } },
+        scales: { x: { ticks: { color: ink, maxTicksLimit: 8 }, grid: { color: grid } },
+                  y: { ticks: { color: ink }, grid: { color: grid } } } }
+    });
+  }
+
   function start() { ensureDOM(); fetchCharts(); setInterval(fetchCharts, 8000); }
   if (document.readyState !== "loading") start(); else document.addEventListener("DOMContentLoaded", start);
 })();
