@@ -146,6 +146,52 @@ def snapshot_from_payload(
     )
 
 
+def parse_lineups(resp: list[dict[str, Any]] | None, home: str, away: str) -> dict[str, Any]:
+    """Map API-Football /fixtures/lineups into {home/away: {formation, xi:[names]}}."""
+    out = {"home": {"formation": None, "xi": []}, "away": {"formation": None, "xi": []}}
+    for block in resp or []:
+        name = (block.get("team") or {}).get("name")
+        key = "home" if name == home else "away" if name == away else None
+        if not key:
+            continue
+        out[key]["formation"] = block.get("formation")
+        out[key]["xi"] = [
+            (e.get("player") or {}).get("name")
+            for e in (block.get("startXI") or [])
+            if (e.get("player") or {}).get("name")
+        ]
+    return out
+
+
+def parse_injuries(resp: list[dict[str, Any]] | None, home: str, away: str) -> dict[str, list[str]]:
+    """Map API-Football /injuries into {home/away: [player names]}."""
+    out: dict[str, list[str]] = {"home": [], "away": []}
+    for item in resp or []:
+        name = (item.get("team") or {}).get("name")
+        player = (item.get("player") or {}).get("name")
+        if not player:
+            continue
+        if name == home:
+            out["home"].append(player)
+        elif name == away:
+            out["away"].append(player)
+    return out
+
+
+def apply_context(snap: MatchSnapshot, lineups: dict | None, injuries: dict | None) -> None:
+    """Attach parsed lineups + injuries onto a snapshot's MatchContext (in place)."""
+    c = snap.context
+    if c is None:
+        return
+    lu, inj = lineups or {}, injuries or {}
+    c.home_formation = (lu.get("home") or {}).get("formation")
+    c.away_formation = (lu.get("away") or {}).get("formation")
+    c.home_xi = (lu.get("home") or {}).get("xi", [])
+    c.away_xi = (lu.get("away") or {}).get("xi", [])
+    c.home_injuries = inj.get("home", [])
+    c.away_injuries = inj.get("away", [])
+
+
 class APIFootballProvider(FootballDataProvider):
     name = "apifootball"
 
@@ -157,11 +203,14 @@ class APIFootballProvider(FootballDataProvider):
         timeout: float = 10.0,
         max_retries: int = 3,
         fetch_statistics: bool = True,
+        fetch_context: bool = True,
         league_id: int | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.max_retries = max_retries
         self.fetch_statistics = fetch_statistics
+        self.fetch_context = fetch_context  # lineups + injuries (fetched once per match)
+        self._ctx_cache: dict[int, dict[str, Any]] = {}
         # When set, only poll this league's live fixtures (e.g. 1 = FIFA World Cup).
         self.league_id = league_id
         self._client = httpx.AsyncClient(
@@ -194,14 +243,39 @@ class APIFootballProvider(FootballDataProvider):
             ]
         snapshots: list[MatchSnapshot] = []
         for fixture in fixtures:
-            stats = events = None
+            fixture_id = (fixture.get("fixture") or {}).get("id")
+            stats = None
             if self.fetch_statistics:
-                fixture_id = (fixture.get("fixture") or {}).get("id")
                 try:
                     stats = (
                         await self._get("/fixtures/statistics", {"fixture": fixture_id})
                     ).get("response")
                 except Exception as exc:  # degrade gracefully
                     log.warning("statistics fetch failed", extra={"err": str(exc)})
-            snapshots.append(snapshot_from_payload(fixture, stats, events))
+            snap = snapshot_from_payload(fixture, stats, None)
+            if self.fetch_context and fixture_id is not None:
+                await self._apply_context(snap, fixture_id)
+            snapshots.append(snap)
         return snapshots
+
+    async def _apply_context(self, snap: MatchSnapshot, fixture_id: int) -> None:
+        """Fetch lineups + injuries once per fixture (cached) and attach to the snapshot."""
+        if fixture_id not in self._ctx_cache:
+            lineups = injuries = None
+            try:
+                lineups = parse_lineups(
+                    (await self._get("/fixtures/lineups", {"fixture": fixture_id})).get("response"),
+                    snap.home_team, snap.away_team,
+                )
+            except Exception as exc:
+                log.warning("lineups fetch failed", extra={"err": str(exc)})
+            try:
+                injuries = parse_injuries(
+                    (await self._get("/injuries", {"fixture": fixture_id})).get("response"),
+                    snap.home_team, snap.away_team,
+                )
+            except Exception as exc:
+                log.warning("injuries fetch failed", extra={"err": str(exc)})
+            self._ctx_cache[fixture_id] = {"lineups": lineups, "injuries": injuries}
+        cached = self._ctx_cache[fixture_id]
+        apply_context(snap, cached.get("lineups"), cached.get("injuries"))

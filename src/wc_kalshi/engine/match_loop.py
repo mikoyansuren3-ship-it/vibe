@@ -27,6 +27,21 @@ def realized_outcome(match: MatchSnapshot) -> Outcome:
     return Outcome.HOME if d > 0 else Outcome.DRAW if d == 0 else Outcome.AWAY
 
 
+def match_context_view(match: MatchSnapshot) -> dict | None:
+    """Compact pre-match context (formations/injuries/XI) for the UI, or None."""
+    c = match.context
+    if c is None or not (c.home_formation or c.away_formation or c.home_injuries or c.away_injuries):
+        return None
+    return {
+        "home_formation": c.home_formation,
+        "away_formation": c.away_formation,
+        "home_injuries": c.home_injuries,
+        "away_injuries": c.away_injuries,
+        "home_xi": c.home_xi,
+        "away_xi": c.away_xi,
+    }
+
+
 @dataclass
 class MatchState:
     match_id: str
@@ -292,6 +307,7 @@ class TickProcessor:
                     }
                     for e in edges
                 ],
+                "context": match_context_view(match),
             },
         )
         rt.state.risk = rt.risk.snapshot()

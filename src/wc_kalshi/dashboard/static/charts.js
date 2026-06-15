@@ -96,6 +96,21 @@
   }
 
   // ---------- match drill-down ----------
+  function ctxHtml(cx, home, away) {
+    const inj = (a) => (a && a.length) ? a.join(", ") : "none";
+    const xi = (a) => (a && a.length) ? a.join(" · ") : "—";
+    const xiBlock = (cx.home_xi && cx.home_xi.length) ? `
+      <div class="lbl" style="margin-top:10px">Starting XI</div>
+      <div class="sub" style="font-size:11px">${home}: ${xi(cx.home_xi)}</div>
+      <div class="sub" style="font-size:11px;margin-top:3px">${away}: ${xi(cx.away_xi)}</div>` : "";
+    return `<div class="card" style="margin-top:12px">
+      <div class="row"><span class="k">${home} formation</span><b>${cx.home_formation || "—"}</b></div>
+      <div class="row"><span class="k">${away} formation</span><b>${cx.away_formation || "—"}</b></div>
+      <div class="lbl" style="margin-top:8px">Injuries / out</div>
+      <div class="sub" style="font-size:12px">${home}: ${inj(cx.home_injuries)}</div>
+      <div class="sub" style="font-size:12px;margin-top:2px">${away}: ${inj(cx.away_injuries)}</div>
+      ${xiBlock}</div>`;
+  }
   let dlProb = null, dlXg = null, dlSeries = [], dlOut = "home";
   function destroyDl() { if (dlProb) { dlProb.destroy(); dlProb = null; } if (dlXg) { dlXg.destroy(); dlXg = null; } }
 
@@ -108,6 +123,7 @@
           <div class="sub" id="dlScore"></div></div>
         <div id="dlOutcomes"></div>
       </div>
+      <div id="dlContext"></div>
       <div class="lbl" style="margin-top:14px">Model vs market — <span id="dlOutLabel">home</span></div>
       <div class="chartbox tall"><canvas id="dlProbCanvas"></canvas></div>
       <div class="lbl" style="margin-top:16px">Cumulative xG</div>
@@ -121,6 +137,8 @@
     dlSeries = (hist && hist.series) || [];
     const sc = document.getElementById("dlScore");
     if (sc && hist.teams) sc.textContent = `${hist.teams.score} · ${dlSeries.length} ticks`;
+    const cxEl = document.getElementById("dlContext");
+    if (cxEl && hist.context) cxEl.innerHTML = ctxHtml(hist.context, home || "Home", away || "Away");
     document.getElementById("dlOutcomes").innerHTML = ["home", "draw", "away"].map(o =>
       `<button class="step" style="width:auto;padding:0 12px;margin-left:6px" onclick="window._dlSelect('${o}')">${o}</button>`).join("");
     if (!dlSeries.length) { document.getElementById("dlEmpty").hidden = false; return; }

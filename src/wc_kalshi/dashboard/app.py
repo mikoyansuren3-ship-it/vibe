@@ -101,11 +101,14 @@ def _match_history(rt: "Runtime", match_id: str) -> dict[str, Any]:
                 "market": g["market"],
             }
         )
-    teams = None
+    teams = context = None
     if snaps:
-        teams = {"home": snaps[-1].home_team, "away": snaps[-1].away_team,
-                 "score": f"{snaps[-1].home_score}-{snaps[-1].away_score}"}
-    return {"match_id": match_id, "teams": teams, "series": series}
+        last = snaps[-1]
+        teams = {"home": last.home_team, "away": last.away_team,
+                 "score": f"{last.home_score}-{last.away_score}"}
+        from ..engine.match_loop import match_context_view
+        context = match_context_view(last)
+    return {"match_id": match_id, "teams": teams, "context": context, "series": series}
 
 
 def _session_stats(rt: "Runtime") -> dict[str, Any]:

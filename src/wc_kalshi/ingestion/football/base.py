@@ -49,6 +49,7 @@ def build_football_provider(cfg: "AppConfig") -> FootballDataProvider:
             timeout=cfg.football.request_timeout_seconds,
             max_retries=cfg.football.max_retries,
             fetch_statistics=cfg.football.apifootball_fetch_statistics,
+            fetch_context=cfg.football.apifootball_fetch_context,
             league_id=cfg.football.apifootball_league_id,
         )
     if provider == "thestatsapi":

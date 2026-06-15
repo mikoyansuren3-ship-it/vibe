@@ -75,6 +75,7 @@ class FootballSection(BaseModel):
     # only ingest WC fixtures and spend far less of the request quota. None = all live.
     apifootball_league_id: int | None = None
     apifootball_fetch_statistics: bool = True
+    apifootball_fetch_context: bool = True  # lineups + injuries (once per match)
     sim_tick_seconds: float = 1.0
     sim_minutes_per_tick: float = 1.0
     sim_seed: int = 42

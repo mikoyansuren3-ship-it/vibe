@@ -21,6 +21,24 @@ def test_apifootball_snapshot_mapping(sample_apifootball):
     assert snap.away.red_cards == 1
 
 
+def test_apifootball_lineup_and_injury_mapping(sample_apifootball):
+    from wc_kalshi.ingestion.football.apifootball import apply_context, parse_injuries, parse_lineups
+
+    lu = parse_lineups(sample_apifootball["_lineups"], "USA", "Wales")
+    assert lu["home"]["formation"] == "4-3-3"
+    assert "Pulisic" in lu["home"]["xi"] and "Turner" in lu["home"]["xi"]
+    assert lu["away"]["formation"] == "3-4-3"
+
+    inj = parse_injuries(sample_apifootball["_injuries"], "USA", "Wales")
+    assert inj["home"] == ["McKennie"] and inj["away"] == ["Ramsey"]
+
+    snap = snapshot_from_payload(sample_apifootball, None, None)
+    apply_context(snap, lu, inj)
+    assert snap.context.home_formation == "4-3-3"
+    assert snap.context.home_injuries == ["McKennie"]
+    assert "Bale" in snap.context.away_xi
+
+
 def test_parse_period():
     assert parse_period("2H") is MatchPeriod.SECOND_HALF
     assert parse_period("FT") is MatchPeriod.FULL_TIME
@@ -100,7 +118,7 @@ def _two_league_fixtures():
 async def test_apifootball_filters_to_league_client_side(monkeypatch):
     from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
 
-    p = APIFootballProvider(api_key="x", fetch_statistics=False, league_id=1)
+    p = APIFootballProvider(api_key="x", fetch_statistics=False, fetch_context=False, league_id=1)
     captured: dict = {}
 
     async def fake_get(endpoint, params):
@@ -117,7 +135,7 @@ async def test_apifootball_filters_to_league_client_side(monkeypatch):
 async def test_apifootball_no_filter_keeps_all_leagues(monkeypatch):
     from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
 
-    p = APIFootballProvider(api_key="x", fetch_statistics=False, league_id=None)
+    p = APIFootballProvider(api_key="x", fetch_statistics=False, fetch_context=False, league_id=None)
 
     async def fake_get(endpoint, params):
         return _two_league_fixtures()

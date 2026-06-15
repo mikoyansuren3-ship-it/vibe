@@ -179,6 +179,7 @@ function render(d) {
       <div class="lbl" style="margin:6px 0 2px">Market 1X2</div>${bar(m.market, ["#1d7a52", "#55657a", "#2d6aa6"])}
       <div class="barlbl"><span>${abbr(m.home_team)}</span><span>DRAW</span><span>${abbr(m.away_team)}</span></div>
       ${(m.edges || []).filter(e => e.actionable).map(e => `<div class="act">▲ ${e.outcome}: net ${e.net_edge >= 0 ? "+" : ""}${f(e.net_edge, 3)}</div>`).join("")}
+      ${m.context ? `<div class="sub" style="font-size:11px;margin-top:7px;border-top:1px solid var(--line);padding-top:6px">${m.context.home_formation || "?"} vs ${m.context.away_formation || "?"}${((m.context.home_injuries || []).length + (m.context.away_injuries || []).length) ? ` · 🩹 ${(m.context.home_injuries || []).length + (m.context.away_injuries || []).length} out` : ""}</div>` : ""}
     </div>`).join("") || '<div class="card empty">Waiting for live matches… the engine polls the World Cup feed.</div>';
 
   // active bets

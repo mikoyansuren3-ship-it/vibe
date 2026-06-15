@@ -40,5 +40,20 @@
   ],
   "_events": [
     {"time": {"elapsed": 55}, "team": {"name": "Wales"}, "type": "Card", "detail": "Red Card"}
+  ],
+  "_lineups": [
+    {"team": {"name": "USA"}, "formation": "4-3-3", "startXI": [
+      {"player": {"name": "Turner", "pos": "G"}},
+      {"player": {"name": "Dest", "pos": "D"}},
+      {"player": {"name": "Pulisic", "pos": "F"}}
+    ]},
+    {"team": {"name": "Wales"}, "formation": "3-4-3", "startXI": [
+      {"player": {"name": "Ward", "pos": "G"}},
+      {"player": {"name": "Bale", "pos": "F"}}
+    ]}
+  ],
+  "_injuries": [
+    {"player": {"name": "McKennie"}, "team": {"name": "USA"}, "type": "Missing Fixture", "reason": "Knee"},
+    {"player": {"name": "Ramsey"}, "team": {"name": "Wales"}, "reason": "Hamstring"}
   ]
 }

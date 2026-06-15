@@ -98,6 +98,13 @@ class MatchContext(BaseModel):
     away_market_value_m: float | None = None
     temp_c: float | None = None
     humidity_pct: float | None = None
+    # Pre-match context (populated by providers that expose it, e.g. API-Football).
+    home_formation: str | None = None
+    away_formation: str | None = None
+    home_xi: list[str] = Field(default_factory=list)
+    away_xi: list[str] = Field(default_factory=list)
+    home_injuries: list[str] = Field(default_factory=list)
+    away_injuries: list[str] = Field(default_factory=list)
 
 
 class MatchSnapshot(BaseModel):
