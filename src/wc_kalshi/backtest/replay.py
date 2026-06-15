@@ -119,7 +119,10 @@ class Backtester:
             db = Database(f"sqlite:///{path}")
         self.rt: Runtime = build_runtime(self.cfg, db=db)
         self.rt.audit.enabled = False  # backtests don't need the audit trail (speed)
-        self.processor = TickProcessor(self.rt, trade=trade, persist=False)
+        # backtests are always autonomous (no human in the loop to approve proposals)
+        self.processor = TickProcessor(
+            self.rt, trade=trade, persist=False, decision_mode="autonomous"
+        )
 
     def _collect(self, per_match_pnl: list[float], equity_curve: list[float]) -> BacktestResult:
         rt = self.rt

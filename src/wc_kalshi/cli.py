@@ -42,7 +42,16 @@ async def _cmd_run(args) -> int:
     from .observability.alerts import Alerter
 
     cfg = _load(args)
-    log.info("starting run", extra={"mode": cfg.mode.value, "dashboard": bool(args.dashboard)})
+    if getattr(args, "advisory", False):
+        cfg.execution.decision_mode = "advisory"
+    elif getattr(args, "autonomous", False):
+        cfg.execution.decision_mode = "autonomous"
+    if cfg.execution.decision_mode == "advisory" and not args.dashboard:
+        log.warning("advisory mode without --dashboard: proposals queue but can't be approved")
+    log.info(
+        "starting run",
+        extra={"mode": cfg.mode.value, "decision": cfg.execution.decision_mode, "dashboard": bool(args.dashboard)},
+    )
     rt = build_runtime(cfg)
     if getattr(args, "sim", False) or cfg.football.provider == "simulated":
         from .ingestion.football.simulated import SimulatedFootballProvider
@@ -205,6 +214,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--dashboard", action="store_true", help="serve the web dashboard")
     r.add_argument("--no-trade", action="store_true", help="observe only, place no orders")
     r.add_argument("--sim", action="store_true", help="force the built-in simulator (ignore the live feed)")
+    g = r.add_mutually_exclusive_group()
+    g.add_argument("--advisory", action="store_true", help="propose trades; you approve/reject them in the dashboard")
+    g.add_argument("--autonomous", action="store_true", help="auto-execute trades (overrides config)")
 
     b = sub.add_parser("backtest", help="synthetic backtest (no keys)")
     b.add_argument("--matches", type=int, default=100)

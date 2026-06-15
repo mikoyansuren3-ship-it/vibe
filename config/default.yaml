@@ -74,6 +74,10 @@ risk:
   min_order_contracts: 1
 
 execution:
+  # autonomous = system auto-executes actionable edges; advisory = it proposes trades
+  # and waits for you to Approve/Reject in the web dashboard. (CLI: --advisory / --autonomous)
+  decision_mode: autonomous
+  proposal_ttl_seconds: 120   # advisory: a pending proposal expires if not acted on
   paper_fill_model: cross_spread  # cross_spread (fill at our limit, realistic) | midpoint (optimistic)
   live_confirmed: false       # MUST be true (and WCK_ALLOW_LIVE=true) to ever trade live
   audit_log_path: ./data/audit.jsonl

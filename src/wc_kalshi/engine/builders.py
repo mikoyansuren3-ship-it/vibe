@@ -47,10 +47,24 @@ class Runtime:
     # Latest Yes mid (probability) per market ticker, ACROSS all matches, so the
     # whole open book is marked to market (not just the match being processed).
     last_mids: dict[str, float] = None  # type: ignore[assignment]
+    # Advisory mode: pending/decided trade proposals (read + acted on by the dashboard).
+    proposals: dict = None  # type: ignore[assignment]
+    # Latest full MarketSnapshot per ticker (so proposal approval can fill realistically).
+    last_market_snaps: dict = None  # type: ignore[assignment]
+    # Serializes order placement between the auto-loop and dashboard approvals.
+    trade_lock: Any = None
 
     def __post_init__(self) -> None:
+        import asyncio
+
         if self.last_mids is None:
             self.last_mids = {}
+        if self.proposals is None:
+            self.proposals = {}
+        if self.last_market_snaps is None:
+            self.last_market_snaps = {}
+        if self.trade_lock is None:
+            self.trade_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         for closer in (self.market_feed, self.executor):

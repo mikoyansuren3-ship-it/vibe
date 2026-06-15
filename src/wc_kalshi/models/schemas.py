@@ -247,6 +247,60 @@ class Probabilities(BaseModel):
         return {Outcome.HOME: self.p_home, Outcome.DRAW: self.p_draw, Outcome.AWAY: self.p_away}
 
 
+class ProposalStatus(str, enum.Enum):
+    PENDING = "pending"
+    EXECUTED = "executed"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    SUPERSEDED = "superseded"
+    FAILED = "failed"
+
+
+class TradeProposal(BaseModel):
+    """An actionable trade awaiting a human decision (advisory mode).
+
+    Carries everything a person needs to decide: the thesis (why), the incentive
+    (edge, expected value, max gain) and the risk (max loss, exposure), plus the
+    exact order that would be placed on approval.
+    """
+
+    id: str
+    ts: datetime = Field(default_factory=utcnow)
+    match_id: str
+    home_team: str
+    away_team: str
+    minute: int
+    score: str
+    market_ticker: str
+    outcome: Outcome
+    action: OrderAction
+    # incentive
+    model_prob: float
+    market_prob: float
+    raw_edge: float
+    net_edge: float
+    expected_value: float  # dollars, ~ contracts * net_edge
+    max_gain: float  # dollars if it wins
+    max_loss: float  # dollars if it loses (= exposure)
+    # the order
+    contracts: int
+    limit_price_cents: int
+    cost_per_contract: float
+    exposure_dollars: float
+    kelly_fraction: float
+    calibration_factor: float
+    # narrative + lifecycle
+    thesis: str = ""
+    risk_note: str = ""
+    status: ProposalStatus = ProposalStatus.PENDING
+    expires_ts: datetime | None = None
+    result: dict[str, Any] | None = None
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status is ProposalStatus.PENDING
+
+
 class EdgeSignal(BaseModel):
     """The output of comparing model vs market for one outcome/market."""
 

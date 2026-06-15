@@ -84,6 +84,22 @@ and unit-tested (`tests/test_config.py`). The intended workflow is **paper → d
 
 ---
 
+## Decision paths (who pulls the trigger)
+
+Orthogonal to the run mode (paper/demo/live), the engine supports two **decision modes**:
+
+| Mode | What happens | Run it |
+|------|--------------|--------|
+| **advisory** | The engine sizes + risk-checks each edge and posts a **trade proposal** (thesis, edge, expected value, max loss) to the web dashboard. **You** click Approve or Reject. | `wck run --advisory --dashboard` |
+| **autonomous** | The engine executes actionable edges itself, weighing the same risk/incentives, subject to every guardrail. | `wck run --autonomous` |
+
+Both honour the identical sizing + guardrail + kill-switch plumbing — autonomous just skips
+the human step. Proposals expire (`execution.proposal_ttl_seconds`) and refresh as the match
+moves, and approval re-checks risk at execution time. The dashboard's **Pending decisions**
+panel is the advisory cockpit; in autonomous mode that panel is hidden and fills stream into
+the activity feed. Decision mode is independent of the account/mode, so you can run
+advisory-on-demo, autonomous-on-demo, etc., and fund each account as you see fit.
+
 ## Configuration
 
 Non-secret config lives in [`config/default.yaml`](config/default.yaml); override with

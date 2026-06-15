@@ -24,7 +24,9 @@ class Orchestrator:
     def __init__(self, rt: Runtime, provider: FootballDataProvider, *, trade: bool = True) -> None:
         self.rt = rt
         self.provider = provider
-        self.processor = TickProcessor(rt, trade=trade)
+        self.processor = TickProcessor(
+            rt, trade=trade, decision_mode=rt.cfg.execution.decision_mode
+        )
         self.states: dict[str, MatchState] = {}
         self._stop = asyncio.Event()
 

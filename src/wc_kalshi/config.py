@@ -116,6 +116,9 @@ class RiskSection(BaseModel):
 
 
 class ExecutionSection(BaseModel):
+    # autonomous = auto-execute actionable edges; advisory = propose & await approval
+    decision_mode: str = "autonomous"
+    proposal_ttl_seconds: int = 120  # advisory: a pending proposal expires after this
     paper_fill_model: str = "cross_spread"
     live_confirmed: bool = False
     audit_log_path: str = "./data/audit.jsonl"

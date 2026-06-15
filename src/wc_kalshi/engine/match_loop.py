@@ -8,8 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from . import trading
 from ..eventbus import Event, EventType
-from ..execution.base import OrderRequest
 from ..features.engineer import match_features
 from ..logging_setup import get_logger
 from ..market.implied import implied_from_markets
@@ -38,10 +38,19 @@ class MatchState:
 
 
 class TickProcessor:
-    def __init__(self, rt: "Runtime", *, trade: bool = True, persist: bool = True) -> None:
+    def __init__(
+        self,
+        rt: "Runtime",
+        *,
+        trade: bool = True,
+        persist: bool = True,
+        decision_mode: str = "autonomous",
+    ) -> None:
         self.rt = rt
         self.trade = trade
         self.persist = persist  # backtests set False to skip per-row DB writes
+        # autonomous = auto-execute; advisory = queue proposals for human approval
+        self.decision_mode = decision_mode
 
     async def process(
         self, match: MatchSnapshot, market_snaps: list[MarketSnapshot], mstate: MatchState
@@ -72,11 +81,13 @@ class TickProcessor:
         # 3) Alerts (goal / red card / divergence)
         self._alerts(match, mstate, edges)
 
-        # 4) Trading
+        # 4) Trading (autonomous) or proposals (advisory)
+        rt.last_market_snaps.update({s.market_ticker: s for s in market_snaps})
         if self.trade and not match.period.is_finished and rt.risk.trading_allowed:
             for edge in edges:
                 if edge.actionable:
-                    await self._maybe_trade(match, edge, market_snaps, mstate)
+                    await self._handle_edge(match, edge, market_snaps, mstate)
+        trading.expire_proposals(rt)
 
         # 5) Mark-to-market across the WHOLE open book (all matches) + daily-loss guardrail
         rt.last_mids.update(mids)
@@ -99,7 +110,9 @@ class TickProcessor:
         }
 
     # ------------------------------------------------------------------ #
-    async def _maybe_trade(self, match, edge, market_snaps, mstate) -> None:
+    async def _handle_edge(self, match, edge, market_snaps, mstate) -> None:
+        """Size + risk-check an actionable edge, then either propose it (advisory)
+        or execute it (autonomous)."""
         rt = self.rt
         cfg = rt.cfg
         ticker = edge.market_ticker
@@ -129,8 +142,20 @@ class TickProcessor:
             rt.audit.guardrail(rd.reason, match_id=match.match_id, market_ticker=ticker)
             return
 
+        # Advisory: queue a proposal for the human to approve in the dashboard.
+        if self.decision_mode == "advisory":
+            trading.make_or_update_proposal(
+                rt, match, edge, decision, rd,
+                calibration=rt.calibration.calibration_factor(), persist=self.persist,
+            )
+            return
+
+        # Autonomous: execute immediately.
+        snap = next((s for s in market_snaps if s.market_ticker == ticker), None)
         coid = f"{match.match_id}:{ticker}:{match.minute}:{decision.action.value}"[:60]
-        order = OrderRequest(
+        _result, n_fills = await trading.place_and_book(
+            rt,
+            coid=coid,
             match_id=match.match_id,
             market_ticker=ticker,
             outcome=edge.outcome,
@@ -138,90 +163,13 @@ class TickProcessor:
             contracts=rd.contracts,
             limit_price_cents=decision.limit_price_cents,
             cost_per_contract=decision.cost_per_contract,
-            time_in_force=cfg.execution.order_time_in_force,
-            client_order_id=coid,
+            snap=snap,
+            persist=self.persist,
         )
-        snap = next((s for s in market_snaps if s.market_ticker == ticker), None)
-        result = await rt.executor.place(order, snap)
-
-        # Persist + audit the order.
-        if self.persist:
-            self._persist_order(order, result)
-            rt.audit.order(order, result)
-        rt.bus.publish(Event(EventType.ORDER, {"coid": coid, "status": result.status.value}, match.match_id))
         mstate.n_orders += 1
-
-        if result.is_filled:
-            for fill in result.fills:
-                rt.portfolio.apply_fill(
-                    match_id=match.match_id,
-                    market_ticker=ticker,
-                    outcome=edge.outcome,
-                    action=fill.action,
-                    contracts=fill.contracts,
-                    price_cents=fill.price_cents,
-                    fee=fill.fee,
-                )
-                rt.risk.register_fill(
-                    match_id=match.match_id,
-                    market_ticker=ticker,
-                    action=fill.action,
-                    contracts=fill.contracts,
-                    cost_per_contract=decision.cost_per_contract,
-                )
-                if self.persist:
-                    self._persist_fill(fill)
-                mstate.n_fills += 1
+        if n_fills:
+            mstate.n_fills += n_fills
             mstate.last_trade_minute[ticker] = match.minute
-            rt.state.add_decision(
-                {
-                    "kind": "fill",
-                    "match_id": match.match_id,
-                    "message": f"{decision.action.value} {result.filled_contracts} {ticker} @ {decision.limit_price_cents}c (edge {edge.net_edge:+.3f})",
-                }
-            )
-
-    def _persist_order(self, order, result) -> None:
-        from ..models.db import OrderRow
-        from ..util import utcnow
-
-        with self.rt.db.session() as s:
-            s.add(
-                OrderRow(
-                    client_order_id=order.client_order_id,
-                    exchange_order_id=result.exchange_order_id,
-                    match_id=order.match_id,
-                    market_ticker=order.market_ticker,
-                    ts=utcnow(),
-                    action=order.action.value,
-                    side=order.side.value,
-                    count=order.contracts,
-                    price_cents=order.limit_price_cents,
-                    status=result.status.value,
-                    mode=self.rt.executor.mode,
-                    data={"reason": result.message, "filled": result.filled_contracts},
-                )
-            )
-
-    def _persist_fill(self, fill) -> None:
-        from ..models.db import FillRow
-        from ..util import utcnow
-
-        with self.rt.db.session() as s:
-            s.add(
-                FillRow(
-                    client_order_id=fill.client_order_id,
-                    match_id=fill.match_id,
-                    market_ticker=fill.market_ticker,
-                    ts=utcnow(),
-                    action=fill.action.value,
-                    side="yes",
-                    count=fill.contracts,
-                    price_cents=fill.price_cents,
-                    fee=fill.fee,
-                    data={},
-                )
-            )
 
     def _alerts(self, match, mstate, edges) -> None:
         rt = self.rt
