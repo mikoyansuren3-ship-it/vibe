@@ -29,18 +29,44 @@ class Orchestrator:
         )
         self.states: dict[str, MatchState] = {}
         self._stop = asyncio.Event()
+        self._flatten_requested = False
+        self._last_live: list[MatchSnapshot] = []
 
     def stop(self) -> None:
         self._stop.set()
 
     def kill(self, reason: str = "manual kill switch") -> None:
         self.rt.risk.engage_kill_switch(reason)
+        # Flatten open inventory on shutdown if configured (place closing orders).
+        if self.rt.cfg.execution.flatten_on_kill:
+            self._flatten_requested = True
         self._stop.set()
 
     def _interval(self) -> float:
+        cfg = self.rt.cfg.football
         if self.provider.name == "simulated":
-            return max(0.0, self.rt.cfg.football.sim_tick_seconds)
-        return max(0.5, self.rt.cfg.football.poll_interval_seconds)
+            return max(0.0, cfg.sim_tick_seconds)
+        if not getattr(cfg, "adaptive_polling", True):
+            return max(0.5, cfg.poll_interval_seconds)
+        return self._adaptive_interval()
+
+    def _adaptive_interval(self) -> float:
+        """Poll fast when a live match is close & late, slow when idle, normal otherwise.
+
+        Finished matches naturally drop out of ``fetch_live`` (so they pause). This
+        keeps us well inside the request budget during blowouts/quiet periods while
+        reacting quickly in the minutes that actually move prices.
+        """
+        cfg = self.rt.cfg.football
+        live = [m for m in self._last_live if m.period.is_live]
+        if not live:
+            return max(1.0, cfg.poll_interval_idle_seconds)
+        urgent = any(
+            m.minute >= 70 and abs(m.score_diff) <= 1 for m in live
+        )
+        if urgent:
+            return max(0.5, cfg.poll_interval_fast_seconds)
+        return max(0.5, cfg.poll_interval_seconds)
 
     async def _handle(self, match: MatchSnapshot) -> None:
         rt = self.rt
@@ -63,8 +89,10 @@ class Orchestrator:
         try:
             while not self._stop.is_set():
                 matches = await self.provider.fetch_live()
+                self._last_live = matches or []
                 if matches:
                     await asyncio.gather(*(self._handle(m) for m in matches))
+                await self._maybe_sweep_resting()
                 tick += 1
 
                 if getattr(self.provider, "all_finished", False):
@@ -77,6 +105,13 @@ class Orchestrator:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            if self._flatten_requested:
+                try:
+                    from .trading import flatten_all
+
+                    await flatten_all(rt, reason="kill switch flatten")
+                except Exception as exc:  # never let flatten mask the shutdown
+                    log.exception("flatten on kill failed", extra={"err": str(exc)})
             rt.audit.log(
                 "shutdown",
                 "orchestrator stopped",
@@ -84,6 +119,13 @@ class Orchestrator:
                 **{k: round(v, 2) if isinstance(v, float) else v for k, v in rt.portfolio.snapshot().items() if not isinstance(v, dict)},
             )
             log.info("orchestrator stopped", extra={"ticks": tick})
+
+    async def _maybe_sweep_resting(self) -> None:
+        timeout = self.rt.cfg.execution.resting_timeout_seconds
+        if timeout and timeout > 0 and self.rt.resting_orders:
+            from .trading import sweep_resting_orders
+
+            await sweep_resting_orders(self.rt, timeout_seconds=timeout)
 
     @property
     def all_settled(self) -> bool:

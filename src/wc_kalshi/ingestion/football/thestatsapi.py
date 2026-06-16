@@ -9,14 +9,18 @@ network layer degrades gracefully when a field is missing.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ...logging_setup import get_logger
 from ...models.schemas import MatchContext, MatchPeriod, MatchSnapshot, TeamStats
+from ...modeling.ratings import apply_ratings
 from ..http import request_with_retry
 from .base import FootballDataProvider
+
+if TYPE_CHECKING:
+    from ..budget import RequestBudget
 
 log = get_logger("football.thestatsapi")
 
@@ -79,7 +83,7 @@ def snapshot_from_match(match: dict[str, Any], stats: dict[str, Any] | None = No
         home=home,
         away=away,
         status=status_str,
-        context=MatchContext(neutral_venue=True),
+        context=apply_ratings(MatchContext(), home_name, away_name),
         raw=match,
     )
 
@@ -94,9 +98,11 @@ class TheStatsAPIProvider(FootballDataProvider):
         base_url: str = "https://api.thestatsapi.com",
         timeout: float = 10.0,
         max_retries: int = 3,
+        budget: "RequestBudget | None" = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.max_retries = max_retries
+        self._budget = budget
         self._client = httpx.AsyncClient(
             timeout=timeout, headers={"Authorization": f"Bearer {api_key}"}
         )
@@ -105,6 +111,8 @@ class TheStatsAPIProvider(FootballDataProvider):
         await self._client.aclose()
 
     async def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self._budget is not None:
+            await self._budget.acquire()
         resp = await request_with_retry(
             self._client,
             "GET",

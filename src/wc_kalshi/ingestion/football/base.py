@@ -29,7 +29,11 @@ class FootballDataProvider(ABC):
 
 
 def build_football_provider(cfg: "AppConfig") -> FootballDataProvider:
-    """Construct the configured provider. Defaults to the offline simulator."""
+    """Construct the configured provider. Defaults to the offline simulator.
+
+    Live providers share a single ``RequestBudget`` (token bucket) sized to the daily
+    quota so the aggregate request rate across all concurrent matches stays bounded.
+    """
     provider = cfg.football.provider.lower()
     if provider == "simulated":
         from .simulated import SimulatedFootballProvider
@@ -38,6 +42,10 @@ def build_football_provider(cfg: "AppConfig") -> FootballDataProvider:
             seed=cfg.football.sim_seed,
             minutes_per_tick=cfg.football.sim_minutes_per_tick,
         )
+
+    from ..budget import RequestBudget
+
+    budget = RequestBudget(cfg.football.daily_request_budget)
     if provider == "apifootball":
         from .apifootball import APIFootballProvider
 
@@ -51,6 +59,7 @@ def build_football_provider(cfg: "AppConfig") -> FootballDataProvider:
             fetch_statistics=cfg.football.apifootball_fetch_statistics,
             fetch_context=cfg.football.apifootball_fetch_context,
             league_id=cfg.football.apifootball_league_id,
+            budget=budget,
         )
     if provider == "thestatsapi":
         from .thestatsapi import TheStatsAPIProvider
@@ -62,5 +71,6 @@ def build_football_provider(cfg: "AppConfig") -> FootballDataProvider:
             base_url=cfg.football.thestatsapi_base,
             timeout=cfg.football.request_timeout_seconds,
             max_retries=cfg.football.max_retries,
+            budget=budget,
         )
     raise ValueError(f"Unknown football provider: {cfg.football.provider!r}")

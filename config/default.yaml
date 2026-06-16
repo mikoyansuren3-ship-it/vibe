@@ -39,6 +39,14 @@ football:
   sim_tick_seconds: 1.0       # wall-clock seconds between simulated ticks
   sim_minutes_per_tick: 1.0   # match-minutes advanced per tick
   sim_seed: 42
+  # Shared request budget across all live football polling (paid tier = 75k/day).
+  daily_request_budget: 75000
+  # Adaptive polling: fast when a live match is close & late, slow when idle.
+  adaptive_polling: true
+  poll_interval_fast_seconds: 4.0
+  poll_interval_idle_seconds: 30.0
+  # Simulated-market xG awareness: 0 = blind (original), 1 = fully prices live xG.
+  sim_market_xg_awareness: 0.0
 
 consensus:
   polymarket_enabled: false
@@ -55,6 +63,11 @@ model:
   live_xg_weight: 0.6
   red_card_xg_penalty: 0.55   # multiply a team's remaining rate by this per net red card
   max_goals: 12               # truncation for the scoreline distribution
+  # Behavioural constants (fit via `wck fit`, see modeling/fit.py). Config-driven so
+  # they are no longer hard-coded magic numbers.
+  elo_tilt: 0.25              # how strongly Elo diff tilts the prior scoring split
+  leader_mult: 0.97          # remaining-rate multiplier for the leading team
+  chaser_mult: 1.06          # remaining-rate multiplier for the chasing team
 
 edge:
   min_edge: 0.05              # raw |model - market| threshold (probability points)
@@ -72,6 +85,7 @@ risk:
   min_price: 0.03                   # do not trade outside [min,max] price (illiquid tails)
   max_price: 0.97
   min_order_contracts: 1
+  position_stop_loss: 0.0           # flatten a market past this fraction of cost lost (0=off)
 
 execution:
   # autonomous = system auto-executes actionable edges; advisory = it proposes trades
@@ -84,6 +98,12 @@ execution:
   order_time_in_force: ioc     # ioc | gtc (paper/demo)
   order_type: limit            # limit | market (demo/live)
   min_retrade_minutes: 8       # min match-minutes between entries in the same market
+  one_trade_per_match_tick: true  # joint 1X2: act on only the strongest leg per tick
+  max_adverse_cents: 3         # skip if price moved this many cents against the signal (0=off)
+  late_taper_minutes: 15       # shrink size as minutes_remaining falls below this (0=off)
+  late_taper_floor: 0.34       # floor for the late-game size taper
+  flatten_on_kill: true        # kill switch places closing orders to flatten inventory
+  resting_timeout_seconds: 30.0  # cancel unfilled resting orders after this long (live)
 
 dashboard:
   host: "127.0.0.1"

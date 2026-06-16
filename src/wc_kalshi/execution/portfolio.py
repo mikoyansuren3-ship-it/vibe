@@ -26,6 +26,9 @@ class Position:
     yes_contracts: int = 0
     no_contracts: int = 0
     cost_paid: float = 0.0  # total cash paid (incl. fees) for this market
+    # Cost split by side (incl. allocated fees) so offsetting lots can be netted.
+    yes_cost: float = 0.0
+    no_cost: float = 0.0
 
     @property
     def net_yes(self) -> int:
@@ -42,6 +45,9 @@ class Portfolio:
     positions: dict[str, Position] = field(default_factory=dict)
     realized_pnl: float = 0.0
     fees_paid: float = 0.0
+    # Net offsetting Yes/No lots in the same market into guaranteed $1 pairs, realizing
+    # them immediately to free tied-up capital (a Yes+No pair always pays exactly $1).
+    net_offsetting: bool = True
 
     def __post_init__(self) -> None:
         if self.cash is None:
@@ -68,12 +74,39 @@ class Portfolio:
         if action is OrderAction.BUY:
             cost = contracts * price_cents / 100.0
             pos.yes_contracts += contracts
+            pos.yes_cost += cost + fee
         else:
             cost = contracts * (100 - price_cents) / 100.0
             pos.no_contracts += contracts
+            pos.no_cost += cost + fee
         self.cash -= cost + fee
         pos.cost_paid += cost + fee
         self.fees_paid += fee
+        if self.net_offsetting:
+            self._net_offsetting(pos)
+
+    def _net_offsetting(self, pos: Position) -> None:
+        """Collapse matched Yes/No lots into realized cash now.
+
+        A matched Yes+No pair pays exactly $1 at settlement regardless of result, so
+        holding both ties up capital for no reason. We realize ``matched * $1`` against
+        the average cost of those lots immediately and remove them, freeing exposure.
+        """
+        matched = min(pos.yes_contracts, pos.no_contracts)
+        if matched <= 0:
+            return
+        avg_yes = pos.yes_cost / pos.yes_contracts
+        avg_no = pos.no_cost / pos.no_contracts
+        freed_cost = matched * (avg_yes + avg_no)
+        self.cash += matched * 1.0
+        self.realized_pnl += matched * 1.0 - freed_cost
+        pos.yes_contracts -= matched
+        pos.no_contracts -= matched
+        pos.yes_cost -= matched * avg_yes
+        pos.no_cost -= matched * avg_no
+        pos.cost_paid -= freed_cost
+        if pos.yes_contracts == 0 and pos.no_contracts == 0:
+            self.positions.pop(pos.market_ticker, None)
 
     # -- valuation ------------------------------------------------------- #
     def bankroll(self) -> float:

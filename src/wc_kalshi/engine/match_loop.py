@@ -13,13 +13,19 @@ from ..eventbus import Event, EventType
 from ..features.engineer import match_features
 from ..logging_setup import get_logger
 from ..market.implied import implied_from_markets
-from ..models.schemas import MarketSnapshot, MatchSnapshot, Outcome, Probabilities
+from ..models.schemas import MarketSnapshot, MatchSnapshot, OrderAction, Outcome, Probabilities
 from ..util import utcnow
 
 if TYPE_CHECKING:
     from .builders import Runtime
 
 log = get_logger("engine.tick")
+
+# Match-minute checkpoints at which we snapshot the model's in-play prediction for
+# calibration. Scoring calibration ONLY on the minute-1 prediction (the prior) tells
+# you nothing about the in-play predictions you actually trade on, so we pool a
+# prediction from across the match timeline plus every prediction we trade on.
+CALIBRATION_CHECKPOINTS: tuple[int, ...] = (10, 25, 40, 55, 70, 85)
 
 
 def realized_outcome(match: MatchSnapshot) -> Outcome:
@@ -47,6 +53,11 @@ class MatchState:
     match_id: str
     prev: MatchSnapshot | None = None
     first_prob: Probabilities | None = None
+    # Predictions pooled for calibration: one per checkpoint minute crossed, plus
+    # every prediction we actually traded on. Scored against the realized outcome
+    # when the match settles.
+    pred_samples: list[Probabilities] = field(default_factory=list)
+    checkpoints_seen: set[int] = field(default_factory=set)
     last_trade_minute: dict[str, int] = field(default_factory=dict)
     settled: bool = False
     n_orders: int = 0
@@ -82,6 +93,7 @@ class TickProcessor:
         rt.bus.publish(Event(EventType.PROBABILITIES, probs.model_dump(mode="json"), match.match_id))
         if mstate.first_prob is None and match.period.is_live:
             mstate.first_prob = probs
+        self._sample_calibration(match, probs, mstate)
 
         feats = match_features(match)
         mids = {s.market_ticker: s.yes_mid_prob for s in market_snaps if s.yes_mid_prob is not None}
@@ -101,14 +113,25 @@ class TickProcessor:
         # 4) Trading (autonomous) or proposals (advisory)
         rt.last_market_snaps.update({s.market_ticker: s for s in market_snaps})
         if self.trade and not match.period.is_finished and rt.risk.trading_allowed:
-            for edge in edges:
-                if edge.actionable:
-                    await self._handle_edge(match, edge, market_snaps, mstate)
+            actionable = [e for e in edges if e.actionable]
+            # Joint 1X2: the three legs are mutually exclusive outcomes of ONE event,
+            # so independent per-leg Kelly over-concentrates match risk. Act on the
+            # single strongest leg per tick (the per-match dollar cap is the backstop).
+            if actionable and getattr(cfg.execution, "one_trade_per_match_tick", True):
+                actionable = [max(actionable, key=lambda e: abs(e.net_edge))]
+            for edge in actionable:
+                await self._handle_edge(match, edge, market_snaps, mstate, probs)
         trading.expire_proposals(rt)
 
-        # 5) Mark-to-market across the WHOLE open book (all matches) + daily-loss guardrail
+        # 5) Mark-to-market across the WHOLE open book (all matches) + daily-loss guardrail.
+        # ``mids`` are the REAL book mids from the market snapshots, so the unrealized
+        # P&L the daily-loss halt keys off is a true mark, not the engine's own price.
         rt.last_mids.update(mids)
         rt.risk.update_unrealized(rt.portfolio.unrealized_pnl(rt.last_mids))
+        # Position-level stops: flatten a market whose mark-to-market loss has run past
+        # the configured fraction of cost, before it can decay further to settlement.
+        if self.trade and match.period.is_live:
+            await self._check_position_stops(match, market_snaps)
         self._sample_equity(rt)
 
         # 6) Settlement
@@ -127,8 +150,18 @@ class TickProcessor:
             "features": feats,
         }
 
+    def _sample_calibration(self, match, probs, mstate) -> None:
+        """Pool a prediction at each checkpoint minute crossed (in-play, not just
+        the prior) so Brier/ECE describe predictions across the match timeline."""
+        if not match.period.is_live:
+            return
+        for cp in CALIBRATION_CHECKPOINTS:
+            if cp not in mstate.checkpoints_seen and match.minute >= cp:
+                mstate.checkpoints_seen.add(cp)
+                mstate.pred_samples.append(probs)
+
     # ------------------------------------------------------------------ #
-    async def _handle_edge(self, match, edge, market_snaps, mstate) -> None:
+    async def _handle_edge(self, match, edge, market_snaps, mstate, probs=None) -> None:
         """Size + risk-check an actionable edge, then either propose it (advisory)
         or execute it (autonomous)."""
         rt = self.rt
@@ -138,10 +171,19 @@ class TickProcessor:
         if last is not None and (match.minute - last) < cfg.execution.min_retrade_minutes:
             return
 
+        # Adverse-selection guard: if the price we'd transact at has moved against us
+        # versus the signal price beyond tolerance, skip — we only get filled when wrong.
+        if self._adversely_selected(edge, market_snaps):
+            rt.audit.guardrail("adverse selection: price moved against signal", match_id=match.match_id, market_ticker=ticker)
+            return
+
+        # Late-game exposure taper: variance collapses near settlement, so shrink size
+        # as the match winds down (a 3c edge at minute 89 is not a 3c edge at minute 20).
+        taper = self._late_game_taper(match)
         decision = rt.sizer.size(
             edge,
             rt.portfolio.bankroll(),
-            calibration_factor=rt.calibration.calibration_factor(),
+            calibration_factor=rt.calibration.calibration_factor() * taper,
             existing_contracts=rt.risk.positions.get(ticker, 0),
             match_exposure=rt.risk.match_exposure.get(match.match_id, 0.0),
         )
@@ -183,11 +225,89 @@ class TickProcessor:
             cost_per_contract=decision.cost_per_contract,
             snap=snap,
             persist=self.persist,
+            minute=match.minute,
         )
         mstate.n_orders += 1
         if n_fills:
             mstate.n_fills += n_fills
             mstate.last_trade_minute[ticker] = match.minute
+            # Score calibration on exactly the prediction we traded on.
+            if probs is not None:
+                mstate.pred_samples.append(probs)
+
+    def _adversely_selected(self, edge, market_snaps) -> bool:
+        """True if the executable price moved against us beyond tolerance since the
+        signal. Compares the edge's signal price to the latest book on the trade side."""
+        tol = getattr(self.rt.cfg.execution, "max_adverse_cents", 0)
+        if not tol or tol <= 0:
+            return False
+        snap = next((s for s in market_snaps if s.market_ticker == edge.market_ticker), None)
+        if snap is None or edge.action is None:
+            return False
+        if edge.action is OrderAction.BUY:
+            signal, now = edge.market_yes_ask, snap.yes_ask
+            return signal is not None and now is not None and now > signal + tol
+        signal, now = edge.market_yes_bid, snap.yes_bid
+        return signal is not None and now is not None and now < signal - tol
+
+    def _late_game_taper(self, match) -> float:
+        """Shrink size toward a floor as the match nears full time."""
+        window = getattr(self.rt.cfg.execution, "late_taper_minutes", 0)
+        if not window or window <= 0:
+            return 1.0
+        floor = getattr(self.rt.cfg.execution, "late_taper_floor", 0.3)
+        rem = match.minutes_remaining
+        if rem >= window:
+            return 1.0
+        return float(max(floor, min(1.0, rem / window)))
+
+    async def _check_position_stops(self, match, market_snaps) -> None:
+        """Flatten any market for this match whose unrealized loss exceeds the stop.
+
+        Loss is measured on the real book mid versus cost paid. Mutually-exclusive 1X2
+        legs are stopped independently; netting then frees the capital.
+        """
+        rt = self.rt
+        thr = rt.cfg.risk.position_stop_loss
+        if not thr or thr <= 0:
+            return
+        for ticker, pos in list(rt.portfolio.positions.items()):
+            if pos.match_id != match.match_id:
+                continue
+            net = pos.net_yes
+            if net == 0 or pos.cost_paid <= 0:
+                continue
+            mid = rt.last_mids.get(ticker)
+            if mid is None:
+                continue
+            unrealized = pos.value_at(mid) - pos.cost_paid
+            if unrealized >= -thr * pos.cost_paid:
+                continue
+            action = OrderAction.SELL if net > 0 else OrderAction.BUY
+            snap = next((s for s in market_snaps if s.market_ticker == ticker), None)
+            price = trading._closing_price_cents(snap, action)
+            coid = f"stop:{ticker}:{match.minute}"[:60]
+            _result, n_fills = await trading.place_and_book(
+                rt,
+                coid=coid,
+                match_id=match.match_id,
+                market_ticker=ticker,
+                outcome=pos.outcome,
+                action=action,
+                contracts=abs(net),
+                limit_price_cents=price,
+                cost_per_contract=(price if action is OrderAction.BUY else 100 - price) / 100.0,
+                snap=snap,
+                persist=self.persist,
+                minute=match.minute,
+            )
+            if n_fills:
+                rt.audit.guardrail(
+                    f"position stop: {ticker} unrealized {unrealized:.2f} "
+                    f"(< -{thr:.0%} of {pos.cost_paid:.2f})",
+                    match_id=match.match_id,
+                    market_ticker=ticker,
+                )
 
     def _sample_equity(self, rt) -> None:
         """Append a point to the equity ring buffer (live only, throttled to ~5s)."""
@@ -268,8 +388,11 @@ class TickProcessor:
             )
         rt.bet_history[:] = rt.bet_history[-200:]
         rt.risk.record_realized_pnl(delta, match_id=match.match_id)
-        if mstate.first_prob is not None:
-            rt.calibration.add(mstate.first_prob, outcome)
+        # Score every pooled in-play/traded prediction against the realized outcome
+        # (fall back to the first live prediction if no checkpoint was ever crossed).
+        samples = mstate.pred_samples or ([mstate.first_prob] if mstate.first_prob else [])
+        for pred in samples:
+            rt.calibration.add(pred, outcome)
         mstate.settled = True
         rt.audit.log(
             "settlement",

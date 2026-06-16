@@ -1,0 +1,21 @@
+{
+  "match_id": "EXAMPLE-2026-001",
+  "home_team": "Atlantis",
+  "away_team": "Eldoria",
+  "home_elo": 1980,
+  "away_elo": 1825,
+  "neutral_venue": true,
+  "ticks": [
+    {"minute": 0,  "period": "1H", "home_score": 0, "away_score": 0, "home_xg": 0.0, "away_xg": 0.0,
+     "markets": {"home": [50, 52], "draw": [27, 29], "away": [20, 22]}},
+    {"minute": 20, "period": "1H", "home_score": 0, "away_score": 0, "home_xg": 0.6, "away_xg": 0.2,
+     "markets": {"home": [55, 57], "draw": [26, 28], "away": [16, 18]}},
+    {"minute": 38, "period": "1H", "home_score": 1, "away_score": 0, "home_xg": 1.0, "away_xg": 0.3,
+     "markets": {"home": [68, 70], "draw": [20, 22], "away": [9, 11]}},
+    {"minute": 60, "period": "2H", "home_score": 1, "away_score": 0, "home_xg": 1.4, "away_xg": 0.6,
+     "markets": {"home": [72, 74], "draw": [18, 20], "away": [7, 9]}},
+    {"minute": 78, "period": "2H", "home_score": 2, "away_score": 0, "home_xg": 1.9, "away_xg": 0.7,
+     "markets": {"home": [88, 90], "draw": [8, 10], "away": [2, 4]}},
+    {"minute": 90, "period": "FT", "home_score": 2, "away_score": 0, "home_xg": 2.1, "away_xg": 0.9}
+  ]
+}

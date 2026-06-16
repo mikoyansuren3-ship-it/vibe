@@ -134,7 +134,14 @@ async def _cmd_backtest(args) -> int:
     from .backtest.replay import Backtester
 
     cfg = _load(args)
-    bt = Backtester(cfg, trade=not args.no_trade)
+    if getattr(args, "market_awareness", None) is not None:
+        cfg.football.sim_market_xg_awareness = args.market_awareness
+    bt = Backtester(
+        cfg,
+        trade=not args.no_trade,
+        stake_mode=getattr(args, "stake_mode", "kelly"),
+        fixed_stake=getattr(args, "fixed_stake", None),
+    )
     res = await bt.run_synthetic(n_matches=args.matches, seed0=args.seed)
     print(res.report())
     if args.json:
@@ -153,6 +160,27 @@ async def _cmd_replay(args) -> int:
     source = Database(args.db if args.db.startswith("sqlite") else f"sqlite:///{args.db}")
     bt = Backtester(cfg, trade=not args.no_trade)
     res = await bt.run_replay(source, match_ids=[args.match_id] if args.match_id else None)
+    print(res.report())
+    await bt.aclose()
+    return 0
+
+
+async def _cmd_historical(args) -> int:
+    from .backtest.historical import load_historical_file
+    from .backtest.replay import Backtester
+
+    cfg = _load(args)
+    matches = load_historical_file(args.data)
+    if not matches:
+        print(f"no historical matches found in {args.data}")
+        return 1
+    bt = Backtester(
+        cfg,
+        trade=not args.no_trade,
+        stake_mode=getattr(args, "stake_mode", "kelly"),
+        fixed_stake=getattr(args, "fixed_stake", None),
+    )
+    res = await bt.run_historical(matches)
     print(res.report())
     await bt.aclose()
     return 0
@@ -177,6 +205,34 @@ async def _cmd_discover(args) -> int:
             print(f"  {ev.get('event_ticker'):<28} {title}  ({n_markets} markets)")
     finally:
         await client.aclose()
+    return 0
+
+
+async def _cmd_fit(args) -> int:
+    from .backtest.historical import load_historical_file
+    from .ingestion.football.simulated import FIXTURES, simulate_full_match
+    from .modeling.fit import fit_constants
+
+    cfg = _load(args)
+    if args.data:
+        matches = [[snap for snap, _mk in ticks] for ticks in load_historical_file(args.data)]
+        src = args.data
+    else:
+        matches = [
+            simulate_full_match(seed=s, fixture=FIXTURES[s % len(FIXTURES)], match_id=f"fit-{s}")
+            for s in range(args.synthetic)
+        ]
+        src = f"{args.synthetic} synthetic matches (NOT real data — demo only)"
+    if not matches:
+        print("no matches to fit on")
+        return 1
+    res = fit_constants(matches, cfg.model)
+    print(f"fit on {src}")
+    print(f"  samples:        {res.n_samples}")
+    print(f"  logloss before: {res.logloss_before:.4f}")
+    print(f"  logloss after:  {res.logloss_after:.4f}")
+    print("  fitted constants (paste into config/local.yaml):")
+    print(res.yaml_snippet())
     return 0
 
 
@@ -223,14 +279,33 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--seed", type=int, default=0)
     b.add_argument("--no-trade", action="store_true")
     b.add_argument("--json", type=str, default=None, help="write JSON result here")
+    b.add_argument(
+        "--stake-mode", choices=["kelly", "fixed"], default="kelly",
+        help="fixed = constant stake per bet so the t-stat/CI are statistically valid",
+    )
+    b.add_argument("--fixed-stake", type=float, default=None, help="$ stake per bet in fixed mode")
+    b.add_argument(
+        "--market-awareness", type=float, default=None,
+        help="simulated market xG awareness 0..1 (0=blind strawman, 1=sharp); higher shrinks edge",
+    )
 
     rp = sub.add_parser("replay", help="replay a stored session DB")
     rp.add_argument("--db", required=True, help="path to a sqlite db from a prior run")
     rp.add_argument("--match-id", default=None)
     rp.add_argument("--no-trade", action="store_true")
 
+    h = sub.add_parser("historical", help="backtest against REAL xG + market data (JSON)")
+    h.add_argument("--data", required=True, help="path to historical JSON/JSONL (see backtest/historical.py)")
+    h.add_argument("--no-trade", action="store_true")
+    h.add_argument("--stake-mode", choices=["kelly", "fixed"], default="kelly")
+    h.add_argument("--fixed-stake", type=float, default=None)
+
     d = sub.add_parser("discover-markets", help="map WC markets via Kalshi (demo/live)")
     d.add_argument("--series", default=None)
+
+    f = sub.add_parser("fit", help="fit model constants to data (real or synthetic)")
+    f.add_argument("--data", default=None, help="historical JSON/JSONL; omit to fit on synthetic")
+    f.add_argument("--synthetic", type=int, default=200, help="synthetic matches if --data omitted")
 
     sub.add_parser("doctor", help="print resolved config and checks")
     return p
@@ -245,6 +320,10 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_cmd_backtest(args))
         if args.command == "replay":
             return asyncio.run(_cmd_replay(args))
+        if args.command == "historical":
+            return asyncio.run(_cmd_historical(args))
+        if args.command == "fit":
+            return asyncio.run(_cmd_fit(args))
         if args.command == "discover-markets":
             return asyncio.run(_cmd_discover(args))
         if args.command == "doctor":

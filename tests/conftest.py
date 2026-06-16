@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -33,7 +34,9 @@ def model_cfg(cfg):
 
 @pytest.fixture
 def tmp_db():
-    path = tempfile.mktemp(prefix="wck-test-", suffix=".sqlite3")
+    # mkstemp (not the deprecated, race-prone mktemp) creates the file safely.
+    fd, path = tempfile.mkstemp(prefix="wck-test-", suffix=".sqlite3")
+    os.close(fd)
     return Database(f"sqlite:///{path}")
 
 

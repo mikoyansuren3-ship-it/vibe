@@ -44,3 +44,42 @@ async def test_zero_size_rejected():
     ex = PaperExecutor()
     res = await ex.place(_order(n=0), _market())
     assert res.status is OrderStatus.REJECTED
+
+
+def _deep_market():
+    from wc_kalshi.models.schemas import BookLevel
+
+    # Buying Yes lifts the No bids: no_depth [46->yes55 x5, 45->yes55? ] etc.
+    return MarketSnapshot(
+        market_ticker="t", match_id="m1", outcome=Outcome.HOME, yes_bid=49, yes_ask=51,
+        yes_depth=[BookLevel(price_cents=49, size=5), BookLevel(price_cents=48, size=50)],
+        no_depth=[BookLevel(price_cents=49, size=5), BookLevel(price_cents=48, size=50)],
+    )
+
+
+async def test_book_model_walks_levels_and_slips():
+    """Buying more than the top level eats deeper, worse-priced levels."""
+    ex = PaperExecutor(fill_model="book")
+    # yes_ask at level0 = 100-49 = 51 (size 5), level1 = 100-48 = 52 (size 50).
+    res = await ex.place(_order(action=OrderAction.BUY, price=52, n=20), _deep_market())
+    assert res.status is OrderStatus.FILLED
+    assert res.filled_contracts == 20
+    # 5 @ 51c + 15 @ 52c => avg 51.75, strictly worse than the top-of-book 51c.
+    assert abs(res.avg_price_cents - 51.75) < 1e-9
+    assert len(res.fills) == 2
+
+
+async def test_book_model_partial_fill_when_depth_insufficient():
+    ex = PaperExecutor(fill_model="book")
+    # limit 51 only crosses level0 (size 5); the rest is beyond the limit -> partial.
+    res = await ex.place(_order(action=OrderAction.BUY, price=51, n=20), _deep_market())
+    assert res.status is OrderStatus.PARTIAL
+    assert res.filled_contracts == 5
+
+
+async def test_book_model_falls_back_when_no_depth():
+    ex = PaperExecutor(fill_model="book")
+    res = await ex.place(_order(price=51, n=10), _market())  # _market has no depth
+    assert res.status is OrderStatus.FILLED
+    assert res.filled_contracts == 10
+    assert res.avg_price_cents == 51

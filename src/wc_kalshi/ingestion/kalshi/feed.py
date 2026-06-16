@@ -35,13 +35,17 @@ class MarketFeed(ABC):
 
 
 class SimulatedMarketFeed(MarketFeed):
-    def __init__(self, *, seed: int = 7) -> None:
+    def __init__(self, *, seed: int = 7, xg_awareness: float = 0.0, model=None) -> None:
         self.seed = seed
+        self.xg_awareness = xg_awareness
+        self.model = model
         self._markets: dict[str, SimulatedMarket] = {}
 
     def _market(self, match_id: str) -> SimulatedMarket:
         if match_id not in self._markets:
-            self._markets[match_id] = SimulatedMarket(match_id, seed=self.seed)
+            self._markets[match_id] = SimulatedMarket(
+                match_id, seed=self.seed, xg_awareness=self.xg_awareness, model=self.model
+            )
         return self._markets[match_id]
 
     async def snapshots_for_match(self, match: MatchSnapshot) -> list[MarketSnapshot]:
@@ -167,7 +171,13 @@ class LiveKalshiMarketFeed(MarketFeed):
 def build_market_feed(cfg: "AppConfig") -> MarketFeed:
     """Paper -> simulated; demo/live -> live Kalshi REST feed."""
     if cfg.is_paper:
-        return SimulatedMarketFeed(seed=cfg.football.sim_seed)
+        from ...modeling.base import build_model
+
+        return SimulatedMarketFeed(
+            seed=cfg.football.sim_seed,
+            xg_awareness=cfg.football.sim_market_xg_awareness,
+            model=build_model(cfg) if cfg.football.sim_market_xg_awareness > 0 else None,
+        )
 
     from .auth import KalshiSigner
     from .client import KalshiClient

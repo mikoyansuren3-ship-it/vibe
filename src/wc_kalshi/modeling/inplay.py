@@ -22,11 +22,12 @@ from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities
 from .base import ProbabilityModel
 from .poisson import one_x_two
 
-# Game-state nudges (mild, capped): leaders protect, chasers push.
-_LEADER_MULT = 0.97
-_CHASER_MULT = 1.06
-# How strongly Elo difference tilts the prior scoring split.
-_ELO_TILT = 0.25
+# Fallback defaults for the behavioural constants, used only when a duck-typed config
+# omits them. The production path reads these from ModelSection (config-driven, fittable
+# via modeling/fit.py) — they are no longer hard-coded magic numbers.
+_LEADER_MULT = 0.97  # leaders protect (lower remaining rate)
+_CHASER_MULT = 1.06  # chasers push (higher remaining rate)
+_ELO_TILT = 0.25  # how strongly Elo difference tilts the prior scoring split
 
 
 class ModelConfigLike:
@@ -40,6 +41,10 @@ class ModelConfigLike:
     live_xg_weight: float
     red_card_xg_penalty: float
     max_goals: int
+    # Optional (config-driven) behavioural constants; defaults applied if absent.
+    elo_tilt: float
+    leader_mult: float
+    chaser_mult: float
 
 
 class DixonColesInplayModel(ProbabilityModel):
@@ -47,6 +52,9 @@ class DixonColesInplayModel(ProbabilityModel):
 
     def __init__(self, cfg: ModelConfigLike) -> None:
         self.cfg = cfg
+        self.elo_tilt = float(getattr(cfg, "elo_tilt", _ELO_TILT))
+        self.leader_mult = float(getattr(cfg, "leader_mult", _LEADER_MULT))
+        self.chaser_mult = float(getattr(cfg, "chaser_mult", _CHASER_MULT))
 
     # -- priors ---------------------------------------------------------- #
     def _prior_full_rates(self, match: MatchSnapshot) -> tuple[float, float]:
@@ -55,7 +63,7 @@ class DixonColesInplayModel(ProbabilityModel):
         ctx = match.context
         if ctx and ctx.home_elo is not None and ctx.away_elo is not None:
             diff = (ctx.home_elo - ctx.away_elo) / 400.0
-            tilt = 10 ** (_ELO_TILT * diff)
+            tilt = 10 ** (self.elo_tilt * diff)
             home = base_h * tilt
             away = base_a / tilt
         else:
@@ -109,12 +117,30 @@ class DixonColesInplayModel(ProbabilityModel):
     ) -> tuple[float, float]:
         diff = match.score_diff
         if diff > 0:  # home leading
-            lam *= _LEADER_MULT
-            mu *= _CHASER_MULT
+            lam *= self.leader_mult
+            mu *= self.chaser_mult
         elif diff < 0:  # away leading
-            mu *= _LEADER_MULT
-            lam *= _CHASER_MULT
+            mu *= self.leader_mult
+            lam *= self.chaser_mult
         return lam, mu
+
+    def _effective_rho(self, match: MatchSnapshot) -> float:
+        """Effective Dixon-Coles rho applied to the REMAINING-goal matrix.
+
+        The DC tau correction adjusts the *full-time* low-score cells (0-0/1-0/0-1/1-1),
+        and it is exact only when the remaining-goal matrix IS the full-time scoreline —
+        i.e. at 0-0. Applying the raw correction to remaining goals after a goal has
+        been scored is unjustified (remaining 1-1 is no longer full-time 1-1). The
+        low-score dependence is also a kickoff/cagey-start phenomenon. So:
+
+          * score 0-0  -> apply rho, faded by the fraction of match remaining;
+          * any goals  -> rho = 0 (no spurious correction).
+        """
+        if match.home_score != 0 or match.away_score != 0:
+            return 0.0
+        elapsed = min(max(match.minute, 0), 90)
+        rem_frac = max(0.0, 90.0 - elapsed) / 90.0
+        return self.cfg.draw_rho * rem_frac
 
     # -- prediction ------------------------------------------------------ #
     def predict(self, match: MatchSnapshot) -> Probabilities:
@@ -127,11 +153,12 @@ class DixonColesInplayModel(ProbabilityModel):
             )
 
         lam, mu = self._remaining_rates(match)
+        rho_eff = self._effective_rho(match)
         ph, pd, pa = one_x_two(
             lam,
             mu,
             current_diff=match.score_diff,
-            rho=self.cfg.draw_rho,
+            rho=rho_eff,
             max_goals=self.cfg.max_goals,
         )
         return Probabilities(

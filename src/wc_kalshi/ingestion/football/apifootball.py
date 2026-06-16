@@ -11,14 +11,18 @@ default runtime provider is the simulator precisely so we never silently burn qu
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ...logging_setup import get_logger
 from ...models.schemas import MatchContext, MatchPeriod, MatchSnapshot, TeamStats
+from ...modeling.ratings import apply_ratings
 from ..http import request_with_retry
 from .base import FootballDataProvider
+
+if TYPE_CHECKING:
+    from ..budget import RequestBudget
 
 log = get_logger("football.apifootball")
 
@@ -124,7 +128,9 @@ def snapshot_from_payload(
                     away_stats.red_cards += 1
 
     venue = (fx.get("venue") or {}).get("name")
-    context = MatchContext(neutral_venue=True, venue=venue)
+    # Inject real pre-match priors (Elo + neutral-venue) so the LIVE model isn't a flat
+    # constant. Explicit ratings on an incoming context would win; here we start fresh.
+    context = apply_ratings(MatchContext(venue=venue), home_name, away_name, venue=venue)
 
     status_str = (
         "finished" if period.is_finished else ("live" if period.is_live else "scheduled")
@@ -205,6 +211,7 @@ class APIFootballProvider(FootballDataProvider):
         fetch_statistics: bool = True,
         fetch_context: bool = True,
         league_id: int | None = None,
+        budget: "RequestBudget | None" = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.max_retries = max_retries
@@ -213,6 +220,7 @@ class APIFootballProvider(FootballDataProvider):
         self._ctx_cache: dict[int, dict[str, Any]] = {}
         # When set, only poll this league's live fixtures (e.g. 1 = FIFA World Cup).
         self.league_id = league_id
+        self._budget = budget
         self._client = httpx.AsyncClient(
             timeout=timeout, headers={"x-apisports-key": api_key}
         )
@@ -221,6 +229,8 @@ class APIFootballProvider(FootballDataProvider):
         await self._client.aclose()
 
     async def _get(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+        if self._budget is not None:
+            await self._budget.acquire()
         resp = await request_with_retry(
             self._client,
             "GET",
