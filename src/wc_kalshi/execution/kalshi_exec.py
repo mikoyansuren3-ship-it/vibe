@@ -2,9 +2,13 @@
 
 Maps our buy/sell-Yes intent onto Kalshi orders. A SELL of Yes is placed as a BUY
 of the No contract (no inventory required), matching the portfolio model. Orders
-carry our ``client_order_id`` for idempotency. Precise fill reconciliation via the
-fills websocket/positions endpoint is a documented next step; here we read the
-create-order response and estimate the fill for marketable limit orders.
+carry our ``client_order_id`` for idempotency.
+
+Fill reconciliation: after placing, we read the ACTUAL fills from the
+``/portfolio/fills`` endpoint (real executed counts, prices and taker flag) and book
+those, rather than assuming the whole order filled at our limit price. If the fills
+endpoint is unavailable or lags, we fall back to the create-order response estimate
+so the executor still degrades gracefully.
 """
 
 from __future__ import annotations
@@ -33,12 +37,16 @@ class KalshiExecutor(Executor):
         mode: str = "demo",
         order_type: str = "limit",
         fee_coefficient: float = 0.07,
+        maker_fraction: float = 0.25,
+        reconcile_fills: bool = True,
     ) -> None:
         super().__init__()
         self.client = client
         self.mode = mode
         self.order_type = order_type
         self.fee_coefficient = fee_coefficient
+        self.maker_fraction = maker_fraction
+        self.reconcile_fills = reconcile_fills
 
     def _build_payload(self, order: OrderRequest) -> dict:
         payload: dict[str, object] = {
@@ -69,47 +77,118 @@ class KalshiExecutor(Executor):
         body = resp.get("order", resp)
         status_raw = str(body.get("status", "")).lower()
         exch_id = body.get("order_id") or body.get("id")
-        filled = int(
-            body.get("taker_fill_count")
-            or body.get("filled_count")
-            or (order.contracts if status_raw in _FILLED_STATES else 0)
-        )
-        fee = kalshi_fee(filled, order.limit_price_cents / 100.0, coefficient=self.fee_coefficient)
 
-        if status_raw in _FILLED_STATES or filled >= order.contracts:
+        # Prefer REAL fills from the exchange over the create-order estimate.
+        real_fills: list[Fill] | None = None
+        if self.reconcile_fills and exch_id:
+            real_fills = await self._reconcile(order, str(exch_id))
+
+        if real_fills is not None:
+            fills = real_fills
+            filled = sum(f.contracts for f in fills)
+            fee = sum(f.fee for f in fills)
+            avg_price = (
+                sum(f.price_cents * f.contracts for f in fills) / filled if filled else 0.0
+            )
+        else:
+            # Fallback: estimate from the create-order response, at the limit price.
+            filled = int(
+                body.get("taker_fill_count")
+                or body.get("filled_count")
+                or (order.contracts if status_raw in _FILLED_STATES else 0)
+            )
+            fee = kalshi_fee(
+                filled, order.limit_price_cents / 100.0, coefficient=self.fee_coefficient
+            )
+            avg_price = float(order.limit_price_cents)
+            fills = (
+                [
+                    Fill(
+                        client_order_id=order.client_order_id,
+                        match_id=order.match_id,
+                        market_ticker=order.market_ticker,
+                        action=order.action,
+                        contracts=filled,
+                        price_cents=order.limit_price_cents,
+                        fee=fee,
+                    )
+                ]
+                if filled > 0
+                else []
+            )
+
+        if filled >= order.contracts and filled > 0:
             status = OrderStatus.FILLED
         elif 0 < filled < order.contracts:
             status = OrderStatus.PARTIAL
-        elif status_raw in _RESTING_STATES:
-            status = OrderStatus.ACCEPTED
+        elif status_raw in _FILLED_STATES:
+            status = OrderStatus.FILLED
         else:
             status = OrderStatus.ACCEPTED
 
-        fills = (
-            [
-                Fill(
-                    client_order_id=order.client_order_id,
-                    match_id=order.match_id,
-                    market_ticker=order.market_ticker,
-                    action=order.action,
-                    contracts=filled,
-                    price_cents=order.limit_price_cents,
-                    fee=fee,
-                )
-            ]
-            if filled > 0
-            else []
-        )
         return OrderResult(
             client_order_id=order.client_order_id,
             status=status,
             filled_contracts=filled,
-            avg_price_cents=float(order.limit_price_cents),
+            avg_price_cents=avg_price,
             fee=fee,
             exchange_order_id=str(exch_id) if exch_id else None,
             message=f"kalshi {self.mode} order status={status_raw or 'unknown'}",
             fills=fills,
         )
+
+    async def _reconcile(self, order: OrderRequest, exch_id: str) -> list[Fill] | None:
+        """Read actual fills for this order and convert to Yes-terms Fill objects.
+
+        Returns None on any failure so the caller falls back to the estimate. A SELL of
+        Yes was placed as a BUY of No, so we translate the No fill price back to Yes
+        terms (yes_price = 100 - no_price) to keep the portfolio in one currency.
+        """
+        try:
+            resp = await self.client.get_fills(order_id=exch_id, ticker=order.market_ticker)
+        except Exception as exc:
+            log.warning("fill reconciliation failed; using estimate", extra={"err": str(exc)})
+            return None
+        raw = resp.get("fills", resp.get("fills", [])) or []
+        out: list[Fill] = []
+        for f in raw:
+            count = int(f.get("count") or f.get("filled_count") or 0)
+            if count <= 0:
+                continue
+            if order.action is OrderAction.BUY:
+                price = f.get("yes_price")
+                price = int(price) if price is not None else order.limit_price_cents
+            else:
+                no_price = f.get("no_price")
+                price = 100 - int(no_price) if no_price is not None else order.limit_price_cents
+            is_taker = bool(f.get("is_taker", True))
+            fee = kalshi_fee(
+                count,
+                price / 100.0,
+                coefficient=self.fee_coefficient,
+                maker=not is_taker,
+                maker_fraction=self.maker_fraction,
+            )
+            out.append(
+                Fill(
+                    client_order_id=order.client_order_id,
+                    match_id=order.match_id,
+                    market_ticker=order.market_ticker,
+                    action=order.action,
+                    contracts=count,
+                    price_cents=int(price),
+                    fee=fee,
+                )
+            )
+        return out
+
+    async def cancel(self, exchange_order_id: str) -> bool:
+        try:
+            await self.client.cancel_order(exchange_order_id)
+            return True
+        except Exception as exc:
+            log.warning("order cancel failed", extra={"order_id": exchange_order_id, "err": str(exc)})
+            return False
 
     async def aclose(self) -> None:
         await self.client.aclose()

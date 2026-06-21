@@ -1,0 +1,17 @@
+[
+  {"index": 1, "type": {"name": "Starting XI"}, "period": 1, "minute": 0, "second": 0, "team": {"name": "Argentina"}},
+  {"index": 2, "type": {"name": "Shot"}, "period": 1, "minute": 10, "second": 5, "team": {"name": "Argentina"},
+   "shot": {"statsbomb_xg": 0.3, "outcome": {"name": "Saved"}}},
+  {"index": 3, "type": {"name": "Shot"}, "period": 1, "minute": 23, "second": 12, "team": {"name": "Argentina"},
+   "shot": {"statsbomb_xg": 0.7, "outcome": {"name": "Goal"}}},
+  {"index": 4, "type": {"name": "Shot"}, "period": 1, "minute": 47, "second": 30, "team": {"name": "France"},
+   "shot": {"statsbomb_xg": 0.2, "outcome": {"name": "Saved"}}},
+  {"index": 5, "type": {"name": "Shot"}, "period": 2, "minute": 45, "second": 40, "team": {"name": "France"},
+   "shot": {"statsbomb_xg": 0.3, "outcome": {"name": "Goal"}}},
+  {"index": 6, "type": {"name": "Bad Behaviour"}, "period": 2, "minute": 60, "second": 0, "team": {"name": "France"},
+   "bad_behaviour": {"card": {"name": "Red Card"}}},
+  {"index": 7, "type": {"name": "Shot"}, "period": 2, "minute": 75, "second": 18, "team": {"name": "Argentina"},
+   "shot": {"statsbomb_xg": 0.5, "outcome": {"name": "Goal"}}},
+  {"index": 8, "type": {"name": "Shot"}, "period": 5, "minute": 120, "second": 0, "team": {"name": "France"},
+   "shot": {"statsbomb_xg": 0.8, "outcome": {"name": "Goal"}}}
+]

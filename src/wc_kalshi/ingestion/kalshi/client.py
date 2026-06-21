@@ -145,6 +145,22 @@ class KalshiClient:
             "GET", "/portfolio/positions", params={"limit": limit, "cursor": cursor}
         )
 
+    async def get_fills(
+        self,
+        *,
+        ticker: str | None = None,
+        order_id: str | None = None,
+        limit: int = 200,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Trade fills for reconciliation: actual executed counts, prices, taker flag."""
+        self._require_auth()
+        return await self._request(
+            "GET",
+            "/portfolio/fills",
+            params={"ticker": ticker, "order_id": order_id, "limit": limit, "cursor": cursor},
+        )
+
     async def create_order(self, order: dict[str, Any]) -> dict[str, Any]:
         self._require_auth()
         return await self._request("POST", "/portfolio/orders", json=order)

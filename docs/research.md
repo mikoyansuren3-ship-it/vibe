@@ -267,3 +267,67 @@ Sources:
       schedule (default 0.07 general).
 - [ ] Verify the chosen football provider actually returns **live xG** for World Cup
       fixtures on the purchased plan (xG coverage is plan/league dependent).
+
+---
+
+## 6. Historical / backtest data sources (real, non-circular evidence)
+
+The synthetic backtest cannot prove a real edge (the simulated market is our own
+invention). `wck historical` instead replays **real** timelines; two free/low-cost
+sources feed it. Implemented in `backtest/statsbomb.py` and `backtest/betfair.py`.
+
+### 6.1 StatsBomb open data (per-shot xG, goals, cards)
+
+- Repo: [statsbomb/open-data](https://github.com/statsbomb/open-data) — licence
+  **CC BY-NC-SA** (attribution required, non-commercial). We fetch from
+  `raw.githubusercontent.com/statsbomb/open-data/master/data/...`, cache under
+  `data/statsbomb/`, and **never redistribute** (git-ignored).
+- World Cups with per-shot xG (verified against `competitions.json`): **men's
+  competition 43, seasons 106 (2022) & 3 (2018)**; women's **72**, seasons 107 (2023) &
+  30 (2019). Older men's seasons exist but lack xG and are skipped with a warning.
+- Event schema used (verified against real data, e.g. 2022 final match `3869685`):
+  `shot.statsbomb_xg`, `shot.outcome.name == "Goal"`, `type.name` ∈
+  {`Shot`, `Own Goal For`, `Bad Behaviour`, `Foul Committed`}, card via
+  `bad_behaviour.card.name` / `foul_committed.card.name` ∈ {`Red Card`, `Second Yellow`}.
+- **Time semantics gotcha:** `minute` is period-based-continuous, **not** reset per period.
+  The 1st half runs 0→45+ (stoppage can reach the low 50s) and the **2nd half starts at
+  minute 45** and runs 45→90+. So 1st-half stoppage (min 46–52) *overlaps* 2nd-half
+  regulation (min 45+). We therefore order events by `(period, minute, second, index)` and
+  clamp each half onto its own band of a 0..90 grid (P1 → `min(m,45)`, P2 → `min(m,90)` —
+  **no `+45` offset**, since P2's minute is already 45-based).
+- StatsBomb has **no market prices** → this source measures **calibration only**.
+
+### 6.2 Betfair historical exchange data (MATCH_ODDS prices → CLV)
+
+- The closest analogue to Kalshi (an exchange, not a bookmaker), but **not Kalshi** — so
+  results are reported as "edge vs the Betfair line", never "Kalshi CLV".
+- Format: historical **stream** files (NDJSON `mcm` market-change messages, optionally
+  `.bz2` / packed in `.tar`). Runner identity is taken from `marketDefinition.runners[]`
+  (selectionId → name) — **never** inferred from `rc[]` alone. Prices from `ltp` (and
+  `atb`/`atl` ladders when present). The **Advanced/PRO** tier is required for in-play
+  prices; **BASIC** is pre-off only. Files are **user-supplied** under your own licence.
+- **Clock alignment is best-effort.** Betfair soccer keeps `inPlay=true` across half-time
+  (HT shows as `status: SUSPENDED`), so we detect HT from several signals — an inPlay
+  flip, a sustained suspension, or the largest update gap in the 35–70-min window — and
+  fall back to a fixed **+15′** offset (flagged as `clock_mode`). The **pre-off line**
+  (last quote before in-play) is clock-independent and is our primary CLV reference.
+
+### 6.3 Kalshi 90′ settlement (why we exclude ET/penalties)
+
+Kalshi World Cup match contracts resolve on the result **after 90 minutes plus stoppage
+time — not extra time or penalties**, and all 2026 venues are neutral for settlement. The
+loader matches this: it keeps only StatsBomb periods 1–2 and settles on the 90′ score, so a
+knockout level at 90′ settles **DRAW** (correct for a 90′ market). Confirm the exact
+per-series wording from the live Kalshi contract before trading.
+
+### 6.4 CLV measured against three reference lines
+
+In-play CLV vs the *last* observed tick is degenerate near full time (prices → 0/1), so
+`BacktestResult` reports CLV vs (a) the **pre-off** line (primary), (b) the quote **+5
+match-minutes** after entry (drift), and (c) the **last tick** (shown with a warning).
+
+### 6.5 Record-forward recorder
+
+`wck record` runs the existing orchestrator **observe-only** (`trade=False`), persisting
+real xG + read-only Kalshi snapshots to a DB that `wck replay` re-evaluates. It is the only
+route to a real **Kalshi** CLV — available once 2026 WC markets list on prod.

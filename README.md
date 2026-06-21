@@ -212,6 +212,77 @@ n=200). The headline ROI compounds the bankroll. The point of the exercise is th
 score+Elo is genuinely small, which is realistic. Calibration is strong (Brier and
 log-loss beat the uniform baseline; reliability bins track empirical frequencies).
 
+> ⚠️ The synthetic backtest is **intentionally circular**: the simulator plants a hidden
+> per-team xG edge and the simulated market is blind to xG, so the model is *guaranteed*
+> to win. `python scripts/backtest.py --sweep` sweeps the market's xG-awareness 0→1 and
+> shows the edge collapse to ~0 as the counterparty sharpens. **Synthetic P&L is not
+> evidence of real edge.** For that, use real data ↓.
+
+### Real-data backtest (StatsBomb xG + Betfair prices)
+
+`wck historical` replays a **real** per-tick xG/score/red-card timeline through the same
+strategy. Build that timeline from free **StatsBomb open data**, and (optionally) attach
+real **Betfair** exchange prices to measure edge against a real line:
+
+```bash
+# 1) Real calibration on the 2022 World Cup (64 matches; downloads + caches to data/statsbomb/)
+wck statsbomb --competition 43 --season 106 --out data/wc2022.jsonl   # season 3 = 2018
+wck historical --data data/wc2022.jsonl --stake-mode fixed
+
+# 2) Real edge vs the exchange line (needs your own Betfair Advanced/PRO historical files)
+wck statsbomb --competition 43 --season 106 --betfair data/betfair/wc2022/ --out data/wc2022_clv.jsonl
+wck historical --data data/wc2022_clv.jsonl --stake-mode fixed
+```
+
+Representative **real** calibration (full 2022 WC, model reads real in-play xG — *not*
+synthetic, *not* circular):
+
+```
+Brier:    0.4335   (uniform 1X2 ≈ 0.667)      ECE: 0.0536   (well calibrated)
+LogLoss:  0.7767   (uniform ≈ 1.099)          reliability bins track the diagonal
+```
+
+**What each source proves — and does not:**
+
+| Source | Proves | Does **not** prove |
+|--------|--------|--------------------|
+| StatsBomb only | real **calibration** (Brier / log-loss / ECE) on real WC outcomes | CLV, tradable edge, Kalshi profitability |
+| StatsBomb + Betfair | real **edge vs the Betfair line** | literally "Kalshi CLV" (Betfair is an exchange, not Kalshi) |
+| `wck record` (prod, 2026) | real **Kalshi** prices for replay | anything until WC match markets list on Kalshi prod |
+
+Honesty notes baked into the tooling:
+
+- **xG-only ⇒ no CLV.** Without `--betfair`, `wck historical` logs a warning and reports
+  calibration only — there are no prices to trade against.
+- **CLV is reported against three reference lines** because in-play CLV vs the *last* tick
+  is degenerate near full time (prices collapse to 0/1). The **pre-off line** is the
+  primary signal; `+5min` captures in-play drift; `vs last tick` is shown with a warning.
+- **90′ regulation only.** We settle on the score after 90′ (+ stoppage), excluding extra
+  time / penalties — matching Kalshi WC match-contract terms. A knockout level at 90′ thus
+  settles **DRAW**, which is correct for a 90′ market.
+- **Elo priors are 2026-era approximations.** Using them on 2018/2022 introduces a mild
+  anachronism; pass `--elo-table teams.json` (a `{team: elo}` snapshot) for date-correct
+  priors. `wck statsbomb` prints Elo coverage so you know what you got.
+- **Data licensing.** StatsBomb open data is **CC BY-NC-SA** (attribution required); Betfair
+  historical files are **user-supplied** under your own licence and need the **Advanced/PRO**
+  tier for in-play prices. We parse them locally and **never** redistribute (both are
+  git-ignored under `data/`).
+
+### Record-forward (capture live data for replay)
+
+`wck record` runs the pipeline **observe-only** (never trades, never reaches live execution)
+and logs real xG + read-only Kalshi prices to a dedicated DB you can replay later:
+
+```bash
+wck record --duration 600 --out-db data/record.sqlite3   # demo prices (plumbing test)
+wck record --source prod --out-db data/kalshi_wc.sqlite3  # read-only prod prices*
+wck replay --db data/record.sqlite3
+```
+
+\* `--source demo` (default) records Kalshi **demo** prices — real plumbing, not real WC
+liquidity. `--source prod` points the read-only feed at the prod base, but yields data only
+once 2026 WC match markets actually list on Kalshi prod (currently `KXWORLDCUP` → 0).
+
 ---
 
 ## Project layout

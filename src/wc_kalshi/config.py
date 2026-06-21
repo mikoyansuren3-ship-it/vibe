@@ -56,7 +56,7 @@ class KalshiSection(BaseModel):
     ws_base_demo: str
     rest_base_prod: str
     ws_base_prod: str
-    worldcup_series_ticker: str = "KXWORLDCUP"
+    worldcup_series_ticker: str = "KXWCGAME"  # 2026 WC match 1X2 (home/away/TIE); verified live
     poll_interval_seconds: float = 2.0
     request_timeout_seconds: float = 10.0
     max_retries: int = 4
@@ -79,6 +79,17 @@ class FootballSection(BaseModel):
     sim_tick_seconds: float = 1.0
     sim_minutes_per_tick: float = 1.0
     sim_seed: int = 42
+    # Shared request budget (token bucket) across all live football polling. The paid
+    # API-Football tier allows 75k/day; we never exceed it regardless of match count.
+    daily_request_budget: int = 75000
+    # Adaptive polling: poll fast when a live match is close & late, slow when idle.
+    adaptive_polling: bool = True
+    poll_interval_fast_seconds: float = 4.0
+    poll_interval_idle_seconds: float = 30.0
+    # Simulated-market realism: 0 = market blind to xG (the original strawman),
+    # 1 = market fully prices live xG. Used to stress-test that our edge shrinks as
+    # the counterparty gets sharper (de-circularises the synthetic backtest).
+    sim_market_xg_awareness: float = 0.0
 
 
 class ConsensusSection(BaseModel):
@@ -95,6 +106,12 @@ class ModelSection(BaseModel):
     live_xg_weight: float = 0.6
     red_card_xg_penalty: float = 0.55
     max_goals: int = 12
+    # Behavioural constants — previously hard-coded magic numbers, now config-driven
+    # so they can be fit against historical data (see modeling/fit.py) and overridden
+    # per series without code edits.
+    elo_tilt: float = 0.25  # how strongly Elo diff tilts the prior scoring split
+    leader_mult: float = 0.97  # remaining-rate multiplier for the team that's ahead
+    chaser_mult: float = 1.06  # remaining-rate multiplier for the team that's behind
 
 
 class EdgeSection(BaseModel):
@@ -114,18 +131,36 @@ class RiskSection(BaseModel):
     min_price: float = 0.03
     max_price: float = 0.97
     min_order_contracts: int = 1
+    # Per-position stop: flatten a market when its mark-to-market loss exceeds this
+    # fraction of cost paid (0 = disabled). Defence against a position running away
+    # mid-match before settlement.
+    position_stop_loss: float = 0.0
 
 
 class ExecutionSection(BaseModel):
     # autonomous = auto-execute actionable edges; advisory = propose & await approval
     decision_mode: str = "autonomous"
     proposal_ttl_seconds: int = 120  # advisory: a pending proposal expires after this
-    paper_fill_model: str = "cross_spread"
+    paper_fill_model: str = "cross_spread"  # cross_spread | midpoint | book (walks depth)
     live_confirmed: bool = False
     audit_log_path: str = "./data/audit.jsonl"
     order_time_in_force: str = "ioc"
     order_type: str = "limit"
     min_retrade_minutes: int = 8
+    # Joint 1X2 risk: act on only the single strongest leg per match per tick.
+    one_trade_per_match_tick: bool = True
+    # Adverse-selection guard: skip if the executable price moved against us by more
+    # than this many cents since the signal (0 = disabled; no-op in synthetic backtests
+    # where the signal and execution snapshot are the same tick).
+    max_adverse_cents: int = 3
+    # Late-game exposure taper: shrink size to `late_taper_floor` as minutes_remaining
+    # falls below `late_taper_minutes` (0 minutes = disabled).
+    late_taper_minutes: int = 15
+    late_taper_floor: float = 0.34
+    # Kill switch flattens open inventory by placing closing orders.
+    flatten_on_kill: bool = True
+    # Cancel resting (unfilled) orders after this many seconds (live order lifecycle).
+    resting_timeout_seconds: float = 30.0
 
 
 class DashboardSection(BaseModel):

@@ -25,6 +25,11 @@ data/*.log.jsonl
 data/audit*.jsonl
 data/runs/
 *.log
+# Third-party open data + generated historical datasets (never redistribute).
+# StatsBomb open data is CC BY-NC-SA; Betfair historical files are user-licensed.
+data/statsbomb/
+data/betfair/
+data/*.jsonl
 
 # Local tooling / harness
 .claude/

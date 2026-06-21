@@ -4,6 +4,9 @@
           [--dashboard] [--no-trade]      run the live/paper pipeline
   wck backtest [--matches N] [--seed S] [--json out.json]   synthetic backtest (no keys)
   wck replay --db path.sqlite3 [--match-id ID]              replay a stored session
+  wck historical --data hist.jsonl                          backtest on REAL xG + prices
+  wck statsbomb --competition 43 --season 106 --out f.jsonl build REAL data from StatsBomb
+  wck record [--source demo|prod] [--out-db f.sqlite3]      observe-only capture for replay
   wck discover-markets [--series TICKER]                    (demo/live) map WC markets
   wck doctor                                                print resolved config & checks
 
@@ -134,7 +137,14 @@ async def _cmd_backtest(args) -> int:
     from .backtest.replay import Backtester
 
     cfg = _load(args)
-    bt = Backtester(cfg, trade=not args.no_trade)
+    if getattr(args, "market_awareness", None) is not None:
+        cfg.football.sim_market_xg_awareness = args.market_awareness
+    bt = Backtester(
+        cfg,
+        trade=not args.no_trade,
+        stake_mode=getattr(args, "stake_mode", "kelly"),
+        fixed_stake=getattr(args, "fixed_stake", None),
+    )
     res = await bt.run_synthetic(n_matches=args.matches, seed0=args.seed)
     print(res.report())
     if args.json:
@@ -153,6 +163,27 @@ async def _cmd_replay(args) -> int:
     source = Database(args.db if args.db.startswith("sqlite") else f"sqlite:///{args.db}")
     bt = Backtester(cfg, trade=not args.no_trade)
     res = await bt.run_replay(source, match_ids=[args.match_id] if args.match_id else None)
+    print(res.report())
+    await bt.aclose()
+    return 0
+
+
+async def _cmd_historical(args) -> int:
+    from .backtest.historical import load_historical_file
+    from .backtest.replay import Backtester
+
+    cfg = _load(args)
+    matches = load_historical_file(args.data)
+    if not matches:
+        print(f"no historical matches found in {args.data}")
+        return 1
+    bt = Backtester(
+        cfg,
+        trade=not args.no_trade,
+        stake_mode=getattr(args, "stake_mode", "kelly"),
+        fixed_stake=getattr(args, "fixed_stake", None),
+    )
+    res = await bt.run_historical(matches)
     print(res.report())
     await bt.aclose()
     return 0
@@ -177,6 +208,134 @@ async def _cmd_discover(args) -> int:
             print(f"  {ev.get('event_ticker'):<28} {title}  ({n_markets} markets)")
     finally:
         await client.aclose()
+    return 0
+
+
+async def _cmd_fit(args) -> int:
+    from .backtest.historical import load_historical_file
+    from .ingestion.football.simulated import FIXTURES, simulate_full_match
+    from .modeling.fit import fit_constants
+
+    cfg = _load(args)
+    if args.data:
+        matches = [[snap for snap, _mk in ticks] for ticks in load_historical_file(args.data)]
+        src = args.data
+    else:
+        matches = [
+            simulate_full_match(seed=s, fixture=FIXTURES[s % len(FIXTURES)], match_id=f"fit-{s}")
+            for s in range(args.synthetic)
+        ]
+        src = f"{args.synthetic} synthetic matches (NOT real data — demo only)"
+    if not matches:
+        print("no matches to fit on")
+        return 1
+    res = fit_constants(matches, cfg.model)
+    print(f"fit on {src}")
+    print(f"  samples:        {res.n_samples}")
+    print(f"  logloss before: {res.logloss_before:.4f}")
+    print(f"  logloss after:  {res.logloss_after:.4f}")
+    print("  fitted constants (paste into config/local.yaml):")
+    print(res.yaml_snippet())
+    return 0
+
+
+def _cmd_statsbomb(args) -> int:
+    """Build a real historical dataset from StatsBomb open data (+ optional Betfair)."""
+    from pathlib import Path
+
+    from .backtest.statsbomb import build_world_cup, coverage_report
+
+    elo_table = None
+    if args.elo_table:
+        raw = json.loads(Path(args.elo_table).read_text())
+        elo_table = {k: float(v) for k, v in raw.items()}
+
+    matches = build_world_cup(
+        args.competition,
+        args.season,
+        repo=args.repo,
+        elo_table=elo_table,
+        settle_minute=args.settle_minute,
+        limit=args.limit,
+    )
+    if not matches:
+        print("no matches converted (no per-shot xG for this season?)", file=sys.stderr)
+        return 1
+
+    if args.betfair:
+        from .backtest.betfair import merge_markets, parse_stream_path
+
+        timelines = parse_stream_path(args.betfair)
+        matches, report = merge_markets(matches, timelines, tolerance=args.betfair_tolerance)
+        print(f"betfair: {report.summary()}", file=sys.stderr)
+    else:
+        print(
+            "no --betfair: xG-only dataset -> wck historical measures CALIBRATION, not CLV.",
+            file=sys.stderr,
+        )
+
+    print(f"coverage: {coverage_report(matches)}", file=sys.stderr)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w") as fh:
+        for m in matches:
+            fh.write(json.dumps(m) + "\n")
+    print(f"wrote {len(matches)} matches -> {out}")
+    print(f"next: wck historical --data {out} --stake-mode fixed")
+    return 0
+
+
+async def _cmd_record(args) -> int:
+    """Observe-only run: log real xG + read-only Kalshi prices to a DB for later replay.
+
+    Never trades and never reaches live execution. ``demo`` (default) records real Kalshi
+    *demo* prices; ``prod`` points the read-only market feed at the prod base (needs prod
+    read creds + listed WC markets — currently none). Replay later with ``wck replay``.
+    """
+    import os
+
+    from .engine.builders import build_runtime
+    from .engine.orchestrator import Orchestrator
+    from .ingestion.football.base import build_football_provider
+    from .models.db import Database
+
+    os.environ["WCK_MODE"] = "demo"  # observe-only; never live
+    cfg = _load(args)
+    if args.source == "prod":
+        cfg.kalshi.rest_base_demo = cfg.kalshi.rest_base_prod  # read-only prod market data
+        log.warning("record: using PROD REST base read-only (needs prod read creds + live WC markets)")
+
+    db = Database(args.out_db if args.out_db.startswith("sqlite") else f"sqlite:///{args.out_db}")
+    rt = build_runtime(cfg, db=db)
+    provider = build_football_provider(cfg)
+    orch = Orchestrator(rt, provider, trade=False)  # NEVER trade while recording
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, orch.stop)
+        except NotImplementedError:  # pragma: no cover (windows)
+            pass
+
+    task = asyncio.create_task(orch.run(max_ticks=args.ticks))
+    if args.duration:
+        async def _timeout() -> None:
+            await asyncio.sleep(args.duration)
+            orch.stop()
+
+        asyncio.create_task(_timeout())  # noqa: RUF006
+    try:
+        await task
+    finally:
+        await rt.aclose()
+
+    ids = db.match_ids()
+    n_rows = sum(len(db.iter_match_snapshots(i)) for i in ids)
+    print("\n--- RECORD SUMMARY ----------------------------------------")
+    print(f"  db:        {args.out_db}")
+    print(f"  matches:   {len(ids)}  match snapshots: {n_rows}")
+    print(f"  replay:    wck replay --db {args.out_db}")
+    print("-----------------------------------------------------------")
     return 0
 
 
@@ -223,14 +382,50 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--seed", type=int, default=0)
     b.add_argument("--no-trade", action="store_true")
     b.add_argument("--json", type=str, default=None, help="write JSON result here")
+    b.add_argument(
+        "--stake-mode", choices=["kelly", "fixed"], default="kelly",
+        help="fixed = constant stake per bet so the t-stat/CI are statistically valid",
+    )
+    b.add_argument("--fixed-stake", type=float, default=None, help="$ stake per bet in fixed mode")
+    b.add_argument(
+        "--market-awareness", type=float, default=None,
+        help="simulated market xG awareness 0..1 (0=blind strawman, 1=sharp); higher shrinks edge",
+    )
 
     rp = sub.add_parser("replay", help="replay a stored session DB")
     rp.add_argument("--db", required=True, help="path to a sqlite db from a prior run")
     rp.add_argument("--match-id", default=None)
     rp.add_argument("--no-trade", action="store_true")
 
+    h = sub.add_parser("historical", help="backtest against REAL xG + market data (JSON)")
+    h.add_argument("--data", required=True, help="path to historical JSON/JSONL (see backtest/historical.py)")
+    h.add_argument("--no-trade", action="store_true")
+    h.add_argument("--stake-mode", choices=["kelly", "fixed"], default="kelly")
+    h.add_argument("--fixed-stake", type=float, default=None)
+
     d = sub.add_parser("discover-markets", help="map WC markets via Kalshi (demo/live)")
     d.add_argument("--series", default=None)
+
+    f = sub.add_parser("fit", help="fit model constants to data (real or synthetic)")
+    f.add_argument("--data", default=None, help="historical JSON/JSONL; omit to fit on synthetic")
+    f.add_argument("--synthetic", type=int, default=200, help="synthetic matches if --data omitted")
+
+    sb = sub.add_parser("statsbomb", help="build a REAL historical dataset from StatsBomb open data")
+    sb.add_argument("--competition", type=int, default=43, help="StatsBomb competition_id (43=men's WC)")
+    sb.add_argument("--season", type=int, default=106, help="StatsBomb season_id (106=2022, 3=2018)")
+    sb.add_argument("--out", required=True, help="output historical JSONL path")
+    sb.add_argument("--repo", default=None, help="local clone of statsbomb/open-data (offline)")
+    sb.add_argument("--elo-table", default=None, help="JSON {team: elo} for date-appropriate priors")
+    sb.add_argument("--betfair", default=None, help="Betfair historical file/dir to merge for CLV")
+    sb.add_argument("--betfair-tolerance", type=int, default=2, help="max minutes when snapping quotes to ticks")
+    sb.add_argument("--settle-minute", type=int, default=90, help="regulation settlement minute")
+    sb.add_argument("--limit", type=int, default=None, help="convert only the first N matches")
+
+    rec = sub.add_parser("record", help="observe-only: log real xG + read-only Kalshi prices to a DB")
+    rec.add_argument("--out-db", default="data/record.sqlite3", help="sqlite db to write")
+    rec.add_argument("--source", choices=["demo", "prod"], default="demo", help="demo prices, or read-only prod base")
+    rec.add_argument("--duration", type=float, default=None, help="auto-stop after N seconds")
+    rec.add_argument("--ticks", type=int, default=None, help="auto-stop after N poll ticks")
 
     sub.add_parser("doctor", help="print resolved config and checks")
     return p
@@ -245,6 +440,14 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_cmd_backtest(args))
         if args.command == "replay":
             return asyncio.run(_cmd_replay(args))
+        if args.command == "historical":
+            return asyncio.run(_cmd_historical(args))
+        if args.command == "fit":
+            return asyncio.run(_cmd_fit(args))
+        if args.command == "statsbomb":
+            return _cmd_statsbomb(args)
+        if args.command == "record":
+            return asyncio.run(_cmd_record(args))
         if args.command == "discover-markets":
             return asyncio.run(_cmd_discover(args))
         if args.command == "doctor":

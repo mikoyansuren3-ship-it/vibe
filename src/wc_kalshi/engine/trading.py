@@ -18,6 +18,7 @@ from ..eventbus import Event, EventType
 from ..execution.base import OrderRequest
 from ..models.schemas import (
     EdgeSignal,
+    MarketSnapshot,
     MatchSnapshot,
     OrderAction,
     Outcome,
@@ -153,10 +154,15 @@ async def place_and_book(
     contracts: int,
     limit_price_cents: int,
     cost_per_contract: float,
-    snap: MatchSnapshot | None,
+    snap: MarketSnapshot | None,
     persist: bool = True,
+    minute: int | None = None,
 ) -> tuple[Any, int]:
-    """Place an order and book any fills into portfolio + risk. Returns (result, n_fills)."""
+    """Place an order and book any fills into portfolio + risk. Returns (result, n_fills).
+
+    ``snap`` is the latest MARKET snapshot (used to model the fill); ``minute`` is the
+    match minute, recorded for CLV/diagnostics.
+    """
     order = OrderRequest(
         match_id=match_id,
         market_ticker=market_ticker,
@@ -193,12 +199,32 @@ async def place_and_book(
                     contracts=fill.contracts,
                     cost_per_contract=cost_per_contract,
                 )
+                # Record the fill for closing-line-value (CLV) analysis.
+                rt.fills_log.append(
+                    {
+                        "match_id": match_id,
+                        "market_ticker": market_ticker,
+                        "outcome": outcome.value,
+                        "action": fill.action.value,
+                        "contracts": fill.contracts,
+                        "entry_price_cents": fill.price_cents,
+                        "minute": minute,
+                    }
+                )
                 if persist:
                     _persist_fill(rt, fill)
                 n_fills += 1
             fmsg = f"{action.value} {result.filled_contracts} {market_ticker} @ {limit_price_cents}c"
             rt.state.add_decision({"kind": "fill", "match_id": match_id, "message": fmsg})
             rt.bus.publish(Event(EventType.ALERT, {"kind": "fill", "message": fmsg}, match_id))
+        # Track an unfilled/partially-filled order as resting (live order lifecycle).
+        if result.exchange_order_id and result.status.value in {"accepted", "partial"}:
+            rt.resting_orders[result.exchange_order_id] = {
+                "coid": coid,
+                "match_id": match_id,
+                "market_ticker": market_ticker,
+                "placed_ts": utcnow(),
+            }
     return result, n_fills
 
 
@@ -247,6 +273,7 @@ async def execute_proposal(
         cost_per_contract=p.cost_per_contract,
         snap=snap,
         persist=persist,
+        minute=p.minute,
     )
     if result.is_filled:
         p.status = ProposalStatus.EXECUTED
@@ -284,6 +311,75 @@ def expire_proposals(rt: "Runtime", now=None) -> None:
     for p in rt.proposals.values():
         if p.is_pending and p.expires_ts is not None and p.expires_ts < now:
             p.status = ProposalStatus.EXPIRED
+
+
+def _closing_price_cents(snap: MarketSnapshot | None, action: OrderAction) -> int:
+    """Marketable price to flatten: cross the spread to guarantee the close fills."""
+    if snap is not None:
+        if action is OrderAction.BUY and snap.yes_ask:
+            return int(snap.yes_ask)
+        if action is OrderAction.SELL and snap.yes_bid:
+            return int(snap.yes_bid)
+        mid = snap.yes_mid_cents
+        if mid:
+            return int(round(mid))
+    # No quote: assume the worst marketable price so we still flatten.
+    return 99 if action is OrderAction.BUY else 1
+
+
+async def flatten_all(rt: "Runtime", *, reason: str = "kill switch flatten", persist: bool = True) -> int:
+    """Place closing orders for every open position (kill-switch flatten).
+
+    Bypasses the pre-trade risk gate on purpose (the kill switch has engaged and we
+    must reduce, not block) but still books the resulting fills. Returns the number of
+    markets flattened.
+    """
+    flattened = 0
+    for ticker, pos in list(rt.portfolio.positions.items()):
+        net = pos.net_yes
+        if net == 0:
+            continue
+        action = OrderAction.SELL if net > 0 else OrderAction.BUY
+        snap = rt.last_market_snaps.get(ticker)
+        price = _closing_price_cents(snap, action)
+        contracts = abs(net)
+        coid = f"flat:{ticker}:{int(utcnow().timestamp())}"[:60]
+        _result, n_fills = await place_and_book(
+            rt,
+            coid=coid,
+            match_id=pos.match_id,
+            market_ticker=ticker,
+            outcome=pos.outcome,
+            action=action,
+            contracts=contracts,
+            limit_price_cents=price,
+            cost_per_contract=(price if action is OrderAction.BUY else 100 - price) / 100.0,
+            snap=snap,
+            persist=persist,
+        )
+        if n_fills:
+            flattened += 1
+    if flattened:
+        rt.audit.guardrail(f"{reason}: flattened {flattened} markets")
+        rt.bus.publish(Event(EventType.ALERT, {"kind": "flatten", "message": f"{reason}: {flattened} markets"}, None))
+    return flattened
+
+
+async def sweep_resting_orders(rt: "Runtime", *, timeout_seconds: float, now=None) -> int:
+    """Cancel resting (unfilled) orders older than ``timeout_seconds`` (live order
+    lifecycle: don't leave stale limit orders exposed to adverse selection)."""
+    now = now or utcnow()
+    canceled = 0
+    for oid, info in list(rt.resting_orders.items()):
+        age = (now - info["placed_ts"]).total_seconds()
+        if age < timeout_seconds:
+            continue
+        ok = await rt.executor.cancel(oid)
+        rt.resting_orders.pop(oid, None)
+        if ok:
+            canceled += 1
+            rt.audit.log("cancel", f"resting order timed out after {age:.0f}s", coid=info.get("coid"))
+    return canceled
 
 
 def proposals_view(rt: "Runtime") -> dict[str, Any]:

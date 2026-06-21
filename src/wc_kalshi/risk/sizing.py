@@ -65,11 +65,16 @@ class PositionSizer:
         max_position_per_market: int = 100,
         max_exposure_per_match: float = 200.0,
         min_order_contracts: int = 1,
+        fixed_stake: float | None = None,
     ) -> None:
         self.kelly_fraction = kelly_fraction
         self.max_position_per_market = max_position_per_market
         self.max_exposure_per_match = max_exposure_per_match
         self.min_order_contracts = min_order_contracts
+        # When set, every actionable edge stakes a CONSTANT dollar amount instead of a
+        # bankroll-proportional Kelly bet. This decouples per-match P&L from compounding
+        # so significance tests (t-stat / bootstrap CI) see (closer to) i.i.d. samples.
+        self.fixed_stake = fixed_stake
 
     @classmethod
     def from_config(cls, cfg) -> "PositionSizer":
@@ -102,7 +107,12 @@ class PositionSizer:
             edge.model_prob, exec_price, edge.action
         )
         sized_fraction = full_kelly * self.kelly_fraction * clamp(calibration_factor, 0.0, 1.0)
-        dollars_at_risk = max(0.0, sized_fraction * bankroll)
+        if self.fixed_stake is not None:
+            # Constant dollar stake (still only when there's an edge), scaled by the
+            # calibration factor so an uncalibrated model still sizes down.
+            dollars_at_risk = max(0.0, self.fixed_stake * clamp(calibration_factor, 0.0, 1.0))
+        else:
+            dollars_at_risk = max(0.0, sized_fraction * bankroll)
 
         if cost_per_contract <= 0:
             return SizingDecision(None, 0, 0, 0.0, 0.0, full_kelly, 0.0, "degenerate price")

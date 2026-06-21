@@ -85,5 +85,12 @@ class Executor(ABC):
     async def _place(self, order: OrderRequest, market: MarketSnapshot | None) -> OrderResult:
         ...
 
+    async def cancel(self, exchange_order_id: str) -> bool:
+        """Cancel a resting order by exchange id. Returns True on success.
+
+        Default no-op (paper IOC orders never rest); live executors override this.
+        """
+        return True
+
     async def aclose(self) -> None:  # pragma: no cover - default
         return None

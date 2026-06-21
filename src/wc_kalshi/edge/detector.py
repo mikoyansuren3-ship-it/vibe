@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..fees import fee_per_contract
+from ..fees import kalshi_fee
 from ..market.implied import MarketView
 from ..models.schemas import EdgeSignal, OrderAction, Outcome, Probabilities
 
@@ -71,12 +71,16 @@ class EdgeDetector:
 
         if raw_edge > 0 and ask is not None:
             # Model says Yes underpriced -> BUY Yes at the ask.
-            fee = fee_per_contract(ask, coefficient=self.fee_coefficient)
+            # Exact ceil-rounded per-contract fee (Kalshi rounds the order fee UP to the
+            # whole cent), not the un-rounded approximation — this is the real cost a
+            # marginal contract clears, so a thin "edge" that only existed because we
+            # under-counted the rounded fee is correctly rejected here.
+            fee = kalshi_fee(1, ask, coefficient=self.fee_coefficient)
             net_edge = model_p - ask - fee - self.slippage
             action, exec_price = OrderAction.BUY, ask
         elif raw_edge < 0 and bid is not None:
             # Model says Yes overpriced -> SELL Yes at the bid.
-            fee = fee_per_contract(bid, coefficient=self.fee_coefficient)
+            fee = kalshi_fee(1, bid, coefficient=self.fee_coefficient)
             net_edge = bid - model_p - fee - self.slippage
             action, exec_price = OrderAction.SELL, bid
 

@@ -57,6 +57,10 @@ class Runtime:
     bet_history: list = None  # type: ignore[assignment]
     # Equity time-series (ring buffer of {ts, equity, realized, unrealized}) for the curve.
     equity_curve: Any = None
+    # Append-only fill log (ticker, action, entry price, minute) for CLV analysis.
+    fills_log: list = None  # type: ignore[assignment]
+    # Resting (unfilled/partial) live orders awaiting fill or timeout cancellation.
+    resting_orders: dict = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         import asyncio
@@ -72,6 +76,10 @@ class Runtime:
             self.last_market_snaps = {}
         if self.bet_history is None:
             self.bet_history = []
+        if self.fills_log is None:
+            self.fills_log = []
+        if self.resting_orders is None:
+            self.resting_orders = {}
         if self.trade_lock is None:
             self.trade_lock = asyncio.Lock()
 
@@ -123,7 +131,11 @@ def build_runtime(cfg: AppConfig, *, db: Database | None = None, bus: EventBus |
     executor: Executor
 
     if cfg.is_paper:
-        market_feed = SimulatedMarketFeed(seed=cfg.football.sim_seed)
+        market_feed = SimulatedMarketFeed(
+            seed=cfg.football.sim_seed,
+            xg_awareness=cfg.football.sim_market_xg_awareness,
+            model=model if cfg.football.sim_market_xg_awareness > 0 else None,
+        )
         executor = PaperExecutor(
             fill_model=cfg.execution.paper_fill_model,
             fee_coefficient=cfg.kalshi.fee_coefficient,
@@ -142,6 +154,7 @@ def build_runtime(cfg: AppConfig, *, db: Database | None = None, bus: EventBus |
             mode=cfg.mode.value,
             order_type=cfg.execution.order_type,
             fee_coefficient=cfg.kalshi.fee_coefficient,
+            maker_fraction=cfg.kalshi.maker_fee_fraction,
         )
 
     state = RuntimeState(mode=cfg.mode.value)
