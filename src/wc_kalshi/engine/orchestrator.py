@@ -111,14 +111,19 @@ class Orchestrator:
         tick = 0
         try:
             while not self._stop.is_set():
-                matches = await self.provider.fetch_live()
-                self._last_live = matches or []
-                if matches:
-                    await asyncio.gather(*(self._handle(m) for m in matches))
-                # Capture the final/settled state of any match that just dropped out of the
-                # live feed (it finished), so replay can settle the outcome + score it.
-                await self._settle_dropped({m.match_id for m in self._last_live})
-                await self._maybe_sweep_resting()
+                # A transient network/API error (DNS blip, 5xx, machine waking from sleep)
+                # must NOT kill a long-running recorder — log it and retry next interval.
+                try:
+                    matches = await self.provider.fetch_live()
+                    self._last_live = matches or []
+                    if matches:
+                        await asyncio.gather(*(self._handle(m) for m in matches))
+                    # Capture the final/settled state of any match that just dropped out of
+                    # the live feed (it finished), so replay can settle + score it.
+                    await self._settle_dropped({m.match_id for m in self._last_live})
+                    await self._maybe_sweep_resting()
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive across blips
+                    log.warning("poll failed; retrying next interval", extra={"err": str(exc)})
                 tick += 1
 
                 if getattr(self.provider, "all_finished", False):

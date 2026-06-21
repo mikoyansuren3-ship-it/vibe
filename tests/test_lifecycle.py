@@ -108,6 +108,35 @@ async def test_settlement_captures_final_state(rt, match_factory):
     assert orch._settled_ids == before
 
 
+class _FlakyProvider(FootballDataProvider):
+    """fetch_live raises on the first poll (network blip), succeeds after."""
+
+    name = "apifootball"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def fetch_live(self):
+        self.calls += 1
+        if self.calls == 1:
+            raise ConnectionError("nodename nor servname provided")
+        return []
+
+    async def aclose(self):
+        pass
+
+
+async def test_network_error_does_not_crash_recorder(rt):
+    """A transient fetch_live failure must be swallowed so the long-running recorder
+    survives blips (real bug: a DNS drop was crashing the launchd recorder)."""
+    rt.cfg.football.poll_interval_idle_seconds = 0.01
+    rt.cfg.football.poll_interval_seconds = 0.01
+    prov = _FlakyProvider()
+    orch = Orchestrator(rt, prov, trade=False)
+    await orch.run(max_ticks=2)  # tick 1 raises, tick 2 succeeds — no exception escapes
+    assert prov.calls == 2
+
+
 async def test_transient_drop_is_not_settled(rt, match_factory):
     """A match that briefly vanishes but isn't actually finished must NOT be settled."""
     still_live = match_factory(match_id="m1", minute=81, period=MatchPeriod.SECOND_HALF)

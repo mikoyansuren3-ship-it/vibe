@@ -15,7 +15,7 @@ kalshi:
 
 execution:
   decision_mode: advisory      # YOU approve each real-money order in the dashboard
-  live_confirmed: false        # <-- set to true to ARM live trading (deliberate)
+  live_confirmed: true        # <-- set to true to ARM live trading (deliberate)
 
 football:
   provider: apifootball        # real World Cup data (needs APIFOOTBALL_KEY)
