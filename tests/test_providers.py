@@ -39,6 +39,20 @@ def test_apifootball_lineup_and_injury_mapping(sample_apifootball):
     assert "Bale" in snap.context.away_xi
 
 
+def test_finished_match_settles_on_regulation_score():
+    """A finished match must settle on the 90' score (score.fulltime), excluding ET/pens —
+    Kalshi WC contracts resolve on 90'. Here the running 'goals' include an ET goal."""
+    fixture = {
+        "fixture": {"id": 5, "status": {"short": "AET", "elapsed": 120}},
+        "teams": {"home": {"name": "Argentina"}, "away": {"name": "France"}},
+        "goals": {"home": 3, "away": 3},  # after ET
+        "score": {"fulltime": {"home": 2, "away": 2}},  # 90' regulation -> DRAW
+    }
+    snap = snapshot_from_payload(fixture)
+    assert snap.period is MatchPeriod.FULL_TIME
+    assert (snap.home_score, snap.away_score) == (2, 2)  # not 3-3
+
+
 def test_parse_period():
     assert parse_period("2H") is MatchPeriod.SECOND_HALF
     assert parse_period("FT") is MatchPeriod.FULL_TIME

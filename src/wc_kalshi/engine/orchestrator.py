@@ -31,6 +31,10 @@ class Orchestrator:
         self._stop = asyncio.Event()
         self._flatten_requested = False
         self._last_live: list[MatchSnapshot] = []
+        # Match-ids seen live last poll, and those whose final state we've captured, so a
+        # match that drops out of fetch_live (finished) gets its settled tick recorded once.
+        self._live_ids: set[str] = set()
+        self._settled_ids: set[str] = set()
 
     def stop(self) -> None:
         self._stop.set()
@@ -81,6 +85,25 @@ class Orchestrator:
         except Exception as exc:  # one bad match must not kill the whole run
             log.exception("match handling failed", extra={"match_id": match.match_id, "err": str(exc)})
 
+    async def _settle_dropped(self, current_ids: set[str]) -> None:
+        """For each match that was live last poll but isn't now, fetch its final state once
+        and run it through the pipeline so the outcome settles (enables CLV/calibration)."""
+        for mid in self._live_ids - current_ids - self._settled_ids:
+            try:
+                snap = await self.provider.fetch_fixture(mid)
+            except Exception as exc:  # one bad settle must not stall the loop
+                log.warning("settlement fetch failed", extra={"match_id": mid, "err": str(exc)})
+                continue
+            if snap is None or not snap.period.is_finished:
+                continue  # transient drop (not actually finished) — retry next poll
+            self._settled_ids.add(mid)
+            log.info(
+                "captured final state",
+                extra={"match_id": mid, "score": f"{snap.home_score}-{snap.away_score}"},
+            )
+            await self._handle(snap)
+        self._live_ids = current_ids
+
     async def run(self, *, max_ticks: int | None = None) -> None:
         rt = self.rt
         log.info("orchestrator starting", extra={"mode": rt.cfg.mode.value, "provider": self.provider.name})
@@ -92,6 +115,9 @@ class Orchestrator:
                 self._last_live = matches or []
                 if matches:
                     await asyncio.gather(*(self._handle(m) for m in matches))
+                # Capture the final/settled state of any match that just dropped out of the
+                # live feed (it finished), so replay can settle the outcome + score it.
+                await self._settle_dropped({m.match_id for m in self._last_live})
                 await self._maybe_sweep_resting()
                 tick += 1
 

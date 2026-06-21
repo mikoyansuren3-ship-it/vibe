@@ -135,6 +135,13 @@ def snapshot_from_payload(
     status_str = (
         "finished" if period.is_finished else ("live" if period.is_live else "scheduled")
     )
+    # Settle on the 90' REGULATION score (Kalshi WC contracts exclude ET/penalties). For a
+    # finished match prefer score.fulltime; in-play we use the running goals.
+    home_score, away_score = _to_int(goals.get("home")), _to_int(goals.get("away"))
+    if period.is_finished:
+        ft = fixture.get("score", {}).get("fulltime") or {}
+        if ft.get("home") is not None and ft.get("away") is not None:
+            home_score, away_score = _to_int(ft.get("home")), _to_int(ft.get("away"))
     return MatchSnapshot(
         match_id=str(fx.get("id", f"{home_name}-{away_name}")),
         provider="apifootball",
@@ -142,8 +149,8 @@ def snapshot_from_payload(
         away_team=away_name,
         minute=_to_int(status.get("elapsed")),
         period=period,
-        home_score=_to_int(goals.get("home")),
-        away_score=_to_int(goals.get("away")),
+        home_score=home_score,
+        away_score=away_score,
         home=home_stats,
         away=away_stats,
         status=status_str,
@@ -267,6 +274,28 @@ class APIFootballProvider(FootballDataProvider):
                 await self._apply_context(snap, fixture_id)
             snapshots.append(snap)
         return snapshots
+
+    async def fetch_fixture(self, match_id: str) -> MatchSnapshot | None:
+        """Fetch one fixture by id in any state (used to capture the final/settled score)."""
+        try:
+            data = await self._get("/fixtures", {"id": str(match_id)})
+        except Exception as exc:
+            log.warning("fixture fetch failed", extra={"id": match_id, "err": str(exc)})
+            return None
+        resp = data.get("response", [])
+        if not resp:
+            return None
+        fixture = resp[0]
+        fixture_id = (fixture.get("fixture") or {}).get("id")
+        stats = None
+        if self.fetch_statistics and fixture_id is not None:
+            try:
+                stats = (
+                    await self._get("/fixtures/statistics", {"fixture": fixture_id})
+                ).get("response")
+            except Exception as exc:
+                log.warning("statistics fetch failed (settle)", extra={"err": str(exc)})
+        return snapshot_from_payload(fixture, stats, None)
 
     async def _apply_context(self, snap: MatchSnapshot, fixture_id: int) -> None:
         """Fetch lineups + injuries once per fixture (cached) and attach to the snapshot."""

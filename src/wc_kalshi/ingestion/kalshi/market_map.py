@@ -58,13 +58,15 @@ class MatchMarketMap:
 
 
 def _classify_market(market: dict[str, Any], home_team: str, away_team: str) -> Outcome | None:
-    # Classify on the human-readable label ONLY. The ticker concatenates both team
-    # abbreviations (e.g. "...USAWAL-WAL"), so matching team names against it gives
-    # false positives ("usa" is a substring of "usawal").
+    # Classify on the YES-SPECIFIC label only. Two traps to avoid:
+    #  * the ticker concatenates both team abbreviations ("...USAWAL-WAL"), and
+    #  * the market ``title`` names BOTH teams ("Jordan vs Argentina Winner?"),
+    # so either would match the home team for every leg. ``yes_sub_title``/``subtitle``
+    # carry just this leg's side ("Jordan", "Tie"), which is what we classify on.
     label = _norm(
         " ".join(
             str(market.get(k, ""))
-            for k in ("yes_sub_title", "yes_subtitle", "subtitle", "title")
+            for k in ("yes_sub_title", "yes_subtitle", "subtitle")
         )
     )
     if any(w in label for w in ("draw", "tie", "no winner")):

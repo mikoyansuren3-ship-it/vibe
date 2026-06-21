@@ -56,7 +56,7 @@ class KalshiSection(BaseModel):
     ws_base_demo: str
     rest_base_prod: str
     ws_base_prod: str
-    worldcup_series_ticker: str = "KXWORLDCUP"
+    worldcup_series_ticker: str = "KXWCGAME"  # 2026 WC match 1X2 (home/away/TIE); verified live
     poll_interval_seconds: float = 2.0
     request_timeout_seconds: float = 10.0
     max_retries: int = 4

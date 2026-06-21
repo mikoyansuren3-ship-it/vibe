@@ -24,6 +24,14 @@ class FootballDataProvider(ABC):
     async def fetch_live(self) -> list[MatchSnapshot]:
         """Return current snapshots for all live matches (possibly empty)."""
 
+    async def fetch_fixture(self, match_id: str) -> "MatchSnapshot | None":
+        """Return the current snapshot for one fixture by id, in ANY state.
+
+        Used to capture a match's FINAL/settled state after it drops out of
+        ``fetch_live`` (which only returns in-play matches). Default: unsupported.
+        """
+        return None
+
     async def aclose(self) -> None:  # pragma: no cover - default no-op
         return None
 

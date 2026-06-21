@@ -69,6 +69,13 @@ class BacktestResult:
     stake_mode: str = "kelly"  # "kelly" (compounding) | "fixed" (constant stake)
     avg_clv: float = 0.0  # mean closing-line value per contract (probability units)
     clv_n: int = 0  # number of fills with a usable closing price
+    # In-play CLV vs the LAST observed tick is degenerate near full time (prices -> 0/1),
+    # so for real exchange data we also measure entry vs the PRE-OFF line (the primary,
+    # non-degenerate edge signal) and vs the quote ~5 match-minutes later (drift capture).
+    avg_clv_preoff: float = 0.0
+    clv_n_preoff: int = 0
+    avg_clv_5m: float = 0.0
+    clv_n_5m: int = 0
     pnl_ci: tuple[float, float] = (0.0, 0.0)  # bootstrap CI for mean per-match P&L
 
     @property
@@ -103,6 +110,10 @@ class BacktestResult:
             "pnl_ci": [round(self.pnl_ci[0], 3), round(self.pnl_ci[1], 3)],
             "avg_clv": round(self.avg_clv, 4),
             "clv_n": self.clv_n,
+            "avg_clv_preoff": round(self.avg_clv_preoff, 4),
+            "clv_n_preoff": self.clv_n_preoff,
+            "avg_clv_5m": round(self.avg_clv_5m, 4),
+            "clv_n_5m": self.clv_n_5m,
             "starting_bankroll": self.starting_bankroll,
             "ending_equity": round(self.ending_equity, 2),
             "calibration": {k: round(v, 4) for k, v in self.calibration.items()},
@@ -125,7 +136,11 @@ class BacktestResult:
             f"  stake mode:         {self.stake_mode}",
             f"  per-match t-stat:   {self.t_stat:.2f}  ({'valid' if self.stake_mode == 'fixed' else 'IGNORE: compounding'})",
             f"  per-match mean 95% CI: [{self.pnl_ci[0]:+.3f}, {self.pnl_ci[1]:+.3f}]  (bootstrap)",
-            f"  avg CLV/contract:   {self.avg_clv:+.4f}  over {self.clv_n} fills  (edge vs closing line)",
+            "-" * 60,
+            "  CLV / contract (probability units; positive = we beat the reference)",
+            f"  vs pre-off line:    {self.avg_clv_preoff:+.4f}  over {self.clv_n_preoff} fills  (PRIMARY exchange edge)",
+            f"  vs +5min line:      {self.avg_clv_5m:+.4f}  over {self.clv_n_5m} fills  (in-play drift)",
+            f"  vs last tick:       {self.avg_clv:+.4f}  over {self.clv_n} fills  (WARNING: degenerate near FT)",
             "-" * 60,
             "  CALIBRATION",
             f"  Brier:    {c.get('brier', float('nan')):.4f}  (uniform 1X2 ~= 0.667)",
@@ -176,10 +191,14 @@ class Backtester:
         self.processor = TickProcessor(
             self.rt, trade=trade, persist=False, decision_mode="autonomous"
         )
+        # Per-market mid history (market_ticker -> [(match_minute, mid_prob)]), captured
+        # during historical replay so CLV can use a NON-degenerate reference line
+        # (pre-off / +5min) instead of only the last tick.
+        self._mid_history: dict[str, list[tuple[int, float]]] = {}
 
     def _collect(self, per_match_pnl: list[float], equity_curve: list[float]) -> BacktestResult:
         rt = self.rt
-        avg_clv, clv_n = self._compute_clv()
+        clv = self._compute_clv()
         return BacktestResult(
             n_matches=len(per_match_pnl),
             n_fills=0,  # set by caller
@@ -192,29 +211,58 @@ class Backtester:
             calibration=rt.calibration.metrics(),
             reliability=rt.calibration.reliability_table(),
             stake_mode=self.stake_mode,
-            avg_clv=avg_clv,
-            clv_n=clv_n,
+            avg_clv=clv["close"][0],
+            clv_n=clv["close"][1],
+            avg_clv_preoff=clv["preoff"][0],
+            clv_n_preoff=clv["preoff"][1],
+            avg_clv_5m=clv["5m"][0],
+            clv_n_5m=clv["5m"][1],
             pnl_ci=bootstrap_ci(per_match_pnl),
         )
 
-    def _compute_clv(self) -> tuple[float, float]:
-        """Mean closing-line value per contract: how much better we entered than the
-        market's CLOSING mid for that outcome. Positive = we beat the close (the gold
-        standard for whether an edge is real, independent of lucky settlement)."""
+    @staticmethod
+    def _signed_clv(action: str, entry: float, reference: float) -> float:
+        """Edge of our entry vs a reference mid, in probability units. Positive = good:
+        a buy (long Yes) wins when the reference is higher; a sell when it's lower."""
+        return (reference - entry) if action == "buy" else (entry - reference)
+
+    def _reference_mid(self, ticker: str, *, at: int | None, tol: int = 2) -> float | None:
+        """Mid for ``ticker`` from the captured tick history. ``at=None`` -> the earliest
+        (pre-off) quote; otherwise the quote nearest match-minute ``at`` within ``tol``."""
+        hist = self._mid_history.get(ticker)
+        if not hist:
+            return None
+        if at is None:
+            return min(hist, key=lambda mm: mm[0])[1]
+        minute, mid = min(hist, key=lambda mm: abs(mm[0] - at))
+        return mid if abs(minute - at) <= tol else None
+
+    def _compute_clv(self) -> dict[str, tuple[float, int]]:
+        """CLV per contract against three reference lines (probability units).
+
+        * ``close``  — vs the LAST observed mid (``rt.last_mids``). Degenerate near full
+          time (prices collapse to 0/1), so it mostly re-states who won; kept for continuity.
+        * ``preoff`` — vs the earliest captured quote (the pre-off / opening line). The
+          primary, non-degenerate signal of whether the entry beat a real market price.
+        * ``5m``     — vs the quote ~5 match-minutes after entry (in-play drift capture).
+        """
         rt = self.rt
-        clvs: list[float] = []
+        buckets: dict[str, list[float]] = {"close": [], "preoff": [], "5m": []}
         for f in rt.fills_log:
-            close_mid = rt.last_mids.get(f["market_ticker"])
-            if close_mid is None:
-                continue
+            ticker, action = f["market_ticker"], f["action"]
             entry = f["entry_price_cents"] / 100.0
-            if f["action"] == "buy":  # bought Yes: good if close ended higher
-                clvs.append(close_mid - entry)
-            else:  # sold Yes: good if close ended lower
-                clvs.append(entry - close_mid)
-        if not clvs:
-            return 0.0, 0
-        return sum(clvs) / len(clvs), len(clvs)
+            close_mid = rt.last_mids.get(ticker)
+            if close_mid is not None:
+                buckets["close"].append(self._signed_clv(action, entry, close_mid))
+            pre = self._reference_mid(ticker, at=None)
+            if pre is not None:
+                buckets["preoff"].append(self._signed_clv(action, entry, pre))
+            ref5 = self._reference_mid(ticker, at=int(f.get("minute", 0)) + 5)
+            if ref5 is not None:
+                buckets["5m"].append(self._signed_clv(action, entry, ref5))
+        return {
+            k: ((sum(v) / len(v), len(v)) if v else (0.0, 0)) for k, v in buckets.items()
+        }
 
     async def run_synthetic(
         self, *, n_matches: int = 100, seed0: int = 0, halt_disabled: bool = True
@@ -291,6 +339,12 @@ class Backtester:
                 continue
             st = MatchState(ticks[0][0].match_id)
             for match, mk in ticks:
+                # Capture each market's mid at this minute for non-degenerate CLV refs.
+                for s in mk:
+                    if s.yes_mid_prob is not None:
+                        self._mid_history.setdefault(s.market_ticker, []).append(
+                            (match.minute, s.yes_mid_prob)
+                        )
                 await self.processor.process(match, mk, st)
             n_fills += st.n_fills
             delta = rt.portfolio.realized_pnl - prev_realized

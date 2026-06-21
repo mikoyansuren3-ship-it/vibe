@@ -4,6 +4,9 @@
           [--dashboard] [--no-trade]      run the live/paper pipeline
   wck backtest [--matches N] [--seed S] [--json out.json]   synthetic backtest (no keys)
   wck replay --db path.sqlite3 [--match-id ID]              replay a stored session
+  wck historical --data hist.jsonl                          backtest on REAL xG + prices
+  wck statsbomb --competition 43 --season 106 --out f.jsonl build REAL data from StatsBomb
+  wck record [--source demo|prod] [--out-db f.sqlite3]      observe-only capture for replay
   wck discover-markets [--series TICKER]                    (demo/live) map WC markets
   wck doctor                                                print resolved config & checks
 
@@ -236,6 +239,106 @@ async def _cmd_fit(args) -> int:
     return 0
 
 
+def _cmd_statsbomb(args) -> int:
+    """Build a real historical dataset from StatsBomb open data (+ optional Betfair)."""
+    from pathlib import Path
+
+    from .backtest.statsbomb import build_world_cup, coverage_report
+
+    elo_table = None
+    if args.elo_table:
+        raw = json.loads(Path(args.elo_table).read_text())
+        elo_table = {k: float(v) for k, v in raw.items()}
+
+    matches = build_world_cup(
+        args.competition,
+        args.season,
+        repo=args.repo,
+        elo_table=elo_table,
+        settle_minute=args.settle_minute,
+        limit=args.limit,
+    )
+    if not matches:
+        print("no matches converted (no per-shot xG for this season?)", file=sys.stderr)
+        return 1
+
+    if args.betfair:
+        from .backtest.betfair import merge_markets, parse_stream_path
+
+        timelines = parse_stream_path(args.betfair)
+        matches, report = merge_markets(matches, timelines, tolerance=args.betfair_tolerance)
+        print(f"betfair: {report.summary()}", file=sys.stderr)
+    else:
+        print(
+            "no --betfair: xG-only dataset -> wck historical measures CALIBRATION, not CLV.",
+            file=sys.stderr,
+        )
+
+    print(f"coverage: {coverage_report(matches)}", file=sys.stderr)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w") as fh:
+        for m in matches:
+            fh.write(json.dumps(m) + "\n")
+    print(f"wrote {len(matches)} matches -> {out}")
+    print(f"next: wck historical --data {out} --stake-mode fixed")
+    return 0
+
+
+async def _cmd_record(args) -> int:
+    """Observe-only run: log real xG + read-only Kalshi prices to a DB for later replay.
+
+    Never trades and never reaches live execution. ``demo`` (default) records real Kalshi
+    *demo* prices; ``prod`` points the read-only market feed at the prod base (needs prod
+    read creds + listed WC markets — currently none). Replay later with ``wck replay``.
+    """
+    import os
+
+    from .engine.builders import build_runtime
+    from .engine.orchestrator import Orchestrator
+    from .ingestion.football.base import build_football_provider
+    from .models.db import Database
+
+    os.environ["WCK_MODE"] = "demo"  # observe-only; never live
+    cfg = _load(args)
+    if args.source == "prod":
+        cfg.kalshi.rest_base_demo = cfg.kalshi.rest_base_prod  # read-only prod market data
+        log.warning("record: using PROD REST base read-only (needs prod read creds + live WC markets)")
+
+    db = Database(args.out_db if args.out_db.startswith("sqlite") else f"sqlite:///{args.out_db}")
+    rt = build_runtime(cfg, db=db)
+    provider = build_football_provider(cfg)
+    orch = Orchestrator(rt, provider, trade=False)  # NEVER trade while recording
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, orch.stop)
+        except NotImplementedError:  # pragma: no cover (windows)
+            pass
+
+    task = asyncio.create_task(orch.run(max_ticks=args.ticks))
+    if args.duration:
+        async def _timeout() -> None:
+            await asyncio.sleep(args.duration)
+            orch.stop()
+
+        asyncio.create_task(_timeout())  # noqa: RUF006
+    try:
+        await task
+    finally:
+        await rt.aclose()
+
+    ids = db.match_ids()
+    n_rows = sum(len(db.iter_match_snapshots(i)) for i in ids)
+    print("\n--- RECORD SUMMARY ----------------------------------------")
+    print(f"  db:        {args.out_db}")
+    print(f"  matches:   {len(ids)}  match snapshots: {n_rows}")
+    print(f"  replay:    wck replay --db {args.out_db}")
+    print("-----------------------------------------------------------")
+    return 0
+
+
 def _cmd_doctor(args) -> int:
     try:
         cfg = _load(args)
@@ -307,6 +410,23 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--data", default=None, help="historical JSON/JSONL; omit to fit on synthetic")
     f.add_argument("--synthetic", type=int, default=200, help="synthetic matches if --data omitted")
 
+    sb = sub.add_parser("statsbomb", help="build a REAL historical dataset from StatsBomb open data")
+    sb.add_argument("--competition", type=int, default=43, help="StatsBomb competition_id (43=men's WC)")
+    sb.add_argument("--season", type=int, default=106, help="StatsBomb season_id (106=2022, 3=2018)")
+    sb.add_argument("--out", required=True, help="output historical JSONL path")
+    sb.add_argument("--repo", default=None, help="local clone of statsbomb/open-data (offline)")
+    sb.add_argument("--elo-table", default=None, help="JSON {team: elo} for date-appropriate priors")
+    sb.add_argument("--betfair", default=None, help="Betfair historical file/dir to merge for CLV")
+    sb.add_argument("--betfair-tolerance", type=int, default=2, help="max minutes when snapping quotes to ticks")
+    sb.add_argument("--settle-minute", type=int, default=90, help="regulation settlement minute")
+    sb.add_argument("--limit", type=int, default=None, help="convert only the first N matches")
+
+    rec = sub.add_parser("record", help="observe-only: log real xG + read-only Kalshi prices to a DB")
+    rec.add_argument("--out-db", default="data/record.sqlite3", help="sqlite db to write")
+    rec.add_argument("--source", choices=["demo", "prod"], default="demo", help="demo prices, or read-only prod base")
+    rec.add_argument("--duration", type=float, default=None, help="auto-stop after N seconds")
+    rec.add_argument("--ticks", type=int, default=None, help="auto-stop after N poll ticks")
+
     sub.add_parser("doctor", help="print resolved config and checks")
     return p
 
@@ -324,6 +444,10 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_cmd_historical(args))
         if args.command == "fit":
             return asyncio.run(_cmd_fit(args))
+        if args.command == "statsbomb":
+            return _cmd_statsbomb(args)
+        if args.command == "record":
+            return asyncio.run(_cmd_record(args))
         if args.command == "discover-markets":
             return asyncio.run(_cmd_discover(args))
         if args.command == "doctor":

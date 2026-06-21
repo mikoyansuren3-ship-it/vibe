@@ -67,6 +67,56 @@ def test_adaptive_interval_fast_when_close_and_late(rt, match_factory):
     assert orch._interval() == rt.cfg.football.poll_interval_idle_seconds
 
 
+class _FinishingProvider(FootballDataProvider):
+    """Live for one poll, then the match drops out; fetch_fixture returns its final state."""
+
+    name = "apifootball"
+
+    def __init__(self, final_snap):
+        self._final = final_snap
+        self.fixture_calls = 0
+
+    async def fetch_live(self):
+        return []
+
+    async def fetch_fixture(self, match_id):
+        self.fixture_calls += 1
+        return self._final
+
+    async def aclose(self):
+        pass
+
+
+async def test_settlement_captures_final_state(rt, match_factory):
+    live = match_factory(match_id="m1", minute=80, period=MatchPeriod.SECOND_HALF,
+                         home_score=1, away_score=1)
+    final = match_factory(match_id="m1", minute=90, period=MatchPeriod.FULL_TIME,
+                          home_score=2, away_score=1, status="finished")
+    orch = Orchestrator(rt, _FinishingProvider(final), trade=False)
+    # Poll 1: match is live (sets first_prob + registers the live id).
+    await orch._handle(live)
+    orch._live_ids = {"m1"}
+    # Poll 2: match dropped out -> capture its settled state.
+    await orch._settle_dropped(current_ids=set())
+    snaps = rt.db.iter_match_snapshots("m1")
+    assert any(s.period is MatchPeriod.FULL_TIME for s in snaps)  # finished tick persisted
+    assert "m1" in orch._settled_ids
+    assert rt.calibration.metrics()["n"] >= 1  # settled outcome scored
+    # Idempotent: a later poll doesn't re-settle.
+    before = orch._settled_ids.copy()
+    await orch._settle_dropped(current_ids=set())
+    assert orch._settled_ids == before
+
+
+async def test_transient_drop_is_not_settled(rt, match_factory):
+    """A match that briefly vanishes but isn't actually finished must NOT be settled."""
+    still_live = match_factory(match_id="m1", minute=81, period=MatchPeriod.SECOND_HALF)
+    orch = Orchestrator(rt, _FinishingProvider(still_live), trade=False)
+    orch._live_ids = {"m1"}
+    await orch._settle_dropped(current_ids=set())
+    assert "m1" not in orch._settled_ids  # not finished -> retry later, no false settle
+
+
 async def test_kill_sets_flatten_request(rt):
     orch = Orchestrator(rt, _StaticProvider([]), trade=False)
     rt.cfg.execution.flatten_on_kill = True

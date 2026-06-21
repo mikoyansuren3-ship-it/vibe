@@ -19,8 +19,9 @@ kalshi:
   ws_base_demo: "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
   rest_base_prod: "https://external-api.kalshi.com/trade-api/v2"
   ws_base_prod: "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
-  # Best-guess WC series ticker; discovered/overridden at runtime (see research.md §1.7).
-  worldcup_series_ticker: "KXWORLDCUP"
+  # 2026 WC per-match 1X2 series (markets like KXWCGAME-26JUN27JORARG-{JOR,ARG,TIE}),
+  # verified live on prod 2026-06-20. Override at runtime if Kalshi changes the format.
+  worldcup_series_ticker: "KXWCGAME"
   poll_interval_seconds: 2.0
   request_timeout_seconds: 10.0
   max_retries: 4

@@ -55,23 +55,55 @@ class SimulatedMarketFeed(MarketFeed):
 # --------------------------------------------------------------------------- #
 # Live parsing helpers (pure, testable)
 # --------------------------------------------------------------------------- #
+def _to_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _price_cents(obj: dict[str, Any], dollars_key: str, cents_key: str) -> int | None:
+    """Price in integer cents from a Kalshi market object: prefer the dollar field
+    ("0.2900" -> 29), fall back to the legacy cent field (29)."""
+    dv = obj.get(dollars_key)
+    if dv not in (None, ""):
+        try:
+            return round(float(dv) * 100)
+        except (TypeError, ValueError):
+            pass
+    return _to_int(obj.get(cents_key))
+
+
 def parse_orderbook(
     ob_json: dict[str, Any],
 ) -> tuple[int | None, int | None, list[BookLevel], list[BookLevel]]:
     """Return (yes_bid, yes_ask, yes_depth, no_depth) from a Kalshi orderbook.
 
-    Kalshi orderbooks list ``yes`` and ``no`` bid levels as ``[price_cents, size]``.
-    Best Yes bid = max Yes price; best Yes ask = 100 - max No price.
+    Best Yes bid = max Yes price; best Yes ask = 100 - max No price. Handles both the
+    current dollar/fixed-point schema (``orderbook_fp`` with ``yes_dollars``/``no_dollars``
+    levels as ``["0.8100", "6357.11"]``) and the legacy cents schema (``orderbook`` with
+    ``yes``/``no`` levels as ``[price_cents, size]``).
     """
-    ob = ob_json.get("orderbook", ob_json) or {}
-    yes_levels = ob.get("yes") or []
-    no_levels = ob.get("no") or []
+    ob = ob_json.get("orderbook_fp") or ob_json.get("orderbook") or ob_json or {}
+    yes_levels = ob.get("yes_dollars")
+    no_levels = ob.get("no_dollars")
+    is_dollars = yes_levels is not None or no_levels is not None
+    if not is_dollars:  # legacy cents schema
+        yes_levels = ob.get("yes")
+        no_levels = ob.get("no")
+    yes_levels = yes_levels or []
+    no_levels = no_levels or []
 
     def to_levels(raw: list[Any]) -> list[BookLevel]:
         out: list[BookLevel] = []
         for level in raw:
             if isinstance(level, (list, tuple)) and len(level) >= 2:
-                out.append(BookLevel(price_cents=int(level[0]), size=int(level[1])))
+                price = float(level[0])
+                cents = round(price * 100) if is_dollars else int(round(price))
+                if cents > 0:
+                    out.append(BookLevel(price_cents=cents, size=int(round(float(level[1])))))
         return out
 
     yes_depth = sorted(to_levels(yes_levels), key=lambda b: b.price_cents, reverse=True)
@@ -87,9 +119,13 @@ def market_snapshot_from_api(
     market_obj: dict[str, Any],
     ob_json: dict[str, Any] | None = None,
 ) -> MarketSnapshot:
-    """Build a ``MarketSnapshot`` from a Kalshi market object (+ optional orderbook)."""
-    yes_bid = market_obj.get("yes_bid")
-    yes_ask = market_obj.get("yes_ask")
+    """Build a ``MarketSnapshot`` from a Kalshi market object (+ optional orderbook).
+
+    Reads the current dollar fields (``yes_bid_dollars`` = "0.2900") and falls back to the
+    legacy cent fields (``yes_bid`` = 29) so captured payloads of either era parse.
+    """
+    yes_bid = _price_cents(market_obj, "yes_bid_dollars", "yes_bid")
+    yes_ask = _price_cents(market_obj, "yes_ask_dollars", "yes_ask")
     yes_depth: list[BookLevel] = []
     no_depth: list[BookLevel] = []
     if ob_json is not None:
@@ -103,9 +139,9 @@ def market_snapshot_from_api(
         outcome=outcome,
         yes_bid=yes_bid,
         yes_ask=yes_ask,
-        last_price=market_obj.get("last_price"),
-        volume=int(market_obj.get("volume") or 0),
-        open_interest=market_obj.get("open_interest"),
+        last_price=_price_cents(market_obj, "last_price_dollars", "last_price"),
+        volume=int(float(market_obj.get("volume_fp") or market_obj.get("volume") or 0)),
+        open_interest=_to_int(market_obj.get("open_interest_fp") or market_obj.get("open_interest")),
         yes_depth=yes_depth,
         no_depth=no_depth,
         status=str(market_obj.get("status", "active")),

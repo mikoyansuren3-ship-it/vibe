@@ -1,0 +1,9 @@
+{"op":"mcm","pt":940000,"mc":[{"id":"1.111","marketDefinition":{"marketType":"MATCH_ODDS","eventName":"Argentina v France","marketTime":"2022-12-18T15:00:00.000Z","inPlay":false,"status":"OPEN","runners":[{"id":1,"name":"Argentina"},{"id":2,"name":"The Draw"},{"id":3,"name":"France"}]}}]}
+{"op":"mcm","pt":970000,"mc":[{"id":"1.111","rc":[{"id":1,"ltp":2.2},{"id":2,"ltp":3.4},{"id":3,"ltp":3.5}]}]}
+{"op":"mcm","pt":1000000,"mc":[{"id":"1.111","marketDefinition":{"marketType":"MATCH_ODDS","eventName":"Argentina v France","marketTime":"2022-12-18T15:00:00.000Z","inPlay":true,"status":"OPEN","runners":[{"id":1,"name":"Argentina"},{"id":2,"name":"The Draw"},{"id":3,"name":"France"}]}}]}
+{"op":"mcm","pt":1600000,"mc":[{"id":"1.111","rc":[{"id":1,"atb":[[2.0,50]],"atl":[[2.04,40]]},{"id":2,"ltp":3.5},{"id":3,"ltp":3.8}]}]}
+{"op":"mcm","pt":3400000,"mc":[{"id":"1.111","rc":[{"id":1,"ltp":1.6},{"id":2,"ltp":3.8},{"id":3,"ltp":6.0}]}]}
+{"op":"mcm","pt":3820000,"mc":[{"id":"1.111","marketDefinition":{"marketType":"MATCH_ODDS","eventName":"Argentina v France","marketTime":"2022-12-18T15:00:00.000Z","inPlay":false,"status":"SUSPENDED","runners":[{"id":1,"name":"Argentina"},{"id":2,"name":"The Draw"},{"id":3,"name":"France"}]}}]}
+{"op":"mcm","pt":4720000,"mc":[{"id":"1.111","marketDefinition":{"marketType":"MATCH_ODDS","eventName":"Argentina v France","marketTime":"2022-12-18T15:00:00.000Z","inPlay":true,"status":"OPEN","runners":[{"id":1,"name":"Argentina"},{"id":2,"name":"The Draw"},{"id":3,"name":"France"}]}}]}
+{"op":"mcm","pt":4840000,"mc":[{"id":"1.111","rc":[{"id":1,"ltp":1.5},{"id":2,"ltp":4.0},{"id":3,"ltp":7.0}]}]}
+{"op":"mcm","pt":6700000,"mc":[{"id":"1.111","rc":[{"id":1,"ltp":1.2},{"id":2,"ltp":6.0},{"id":3,"ltp":15.0}]}]}
