@@ -296,9 +296,17 @@ class Backtester:
         per_match: list[float] = []
         equity_curve: list[float] = []
         n_fills = 0
+        n_skipped = 0
         prev_realized = 0.0
         for match_id in ids:
             match_snaps = source_db.iter_match_snapshots(match_id)
+            # Only score fully-played matches: one that never reached a settled (FT) state is
+            # in-progress or abandoned (e.g. an INTERRUPTED fixture), and its partial fills
+            # would pollute CLV/calibration with no real outcome. Skip it.
+            if not any(s.period.is_finished for s in match_snaps):
+                n_skipped += 1
+                log.info("replay: skipping unsettled/abandoned match", extra={"match_id": match_id})
+                continue
             market_snaps = source_db.iter_market_snapshots(match_id)
             ticks = _bucket_market_by_tick(match_snaps, market_snaps)
             st = MatchState(match_id)

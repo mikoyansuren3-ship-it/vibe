@@ -40,6 +40,12 @@ _PERIOD_MAP = {
 }
 
 
+# Abnormal fixture statuses with no valid 90' result: interrupted, suspended, abandoned,
+# postponed, cancelled, walkover, technical-loss/awarded, to-be-defined. These must NOT be
+# mislabelled as "1H live" or fed into calibration/CLV — they get status "abandoned".
+_VOID_STATUSES = frozenset({"INT", "SUSP", "ABD", "PST", "CANC", "WO", "AWD", "TBD"})
+
+
 def parse_period(short: str | None) -> MatchPeriod:
     return _PERIOD_MAP.get((short or "").upper(), MatchPeriod.FIRST_HALF)
 
@@ -132,9 +138,12 @@ def snapshot_from_payload(
     # constant. Explicit ratings on an incoming context would win; here we start fresh.
     context = apply_ratings(MatchContext(venue=venue), home_name, away_name, venue=venue)
 
-    status_str = (
-        "finished" if period.is_finished else ("live" if period.is_live else "scheduled")
-    )
+    if (short or "").upper() in _VOID_STATUSES:
+        status_str = "abandoned"  # interrupted/suspended/postponed/etc — no valid 90' result
+    else:
+        status_str = (
+            "finished" if period.is_finished else ("live" if period.is_live else "scheduled")
+        )
     # Settle on the 90' REGULATION score (Kalshi WC contracts exclude ET/penalties). For a
     # finished match prefer score.fulltime; in-play we use the running goals.
     home_score, away_score = _to_int(goals.get("home")), _to_int(goals.get("away"))

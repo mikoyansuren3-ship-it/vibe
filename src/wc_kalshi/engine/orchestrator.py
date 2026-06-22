@@ -77,6 +77,8 @@ class Orchestrator:
 
     async def _handle(self, match: MatchSnapshot) -> None:
         rt = self.rt
+        if match.status == "abandoned":  # interrupted/suspended/etc — no valid result
+            return
         try:
             rt.db.add_match_snapshot(match)
             rt.bus.publish(Event(EventType.MATCH_SNAPSHOT, {"match_id": match.match_id, "minute": match.minute}, match.match_id))
@@ -109,7 +111,12 @@ class Orchestrator:
             except Exception as exc:  # one bad settle must not stall the loop
                 log.warning("settlement fetch failed", extra={"match_id": mid, "err": str(exc)})
                 snap = None
-            if snap is not None and snap.period.is_finished:
+            if snap is not None and snap.status == "abandoned":
+                # interrupted/suspended/postponed — no valid 90' result; stop retrying.
+                self._settled_ids.add(mid)
+                del self._pending_settle[mid]
+                log.info("match abandoned/void — not settling", extra={"match_id": mid})
+            elif snap is not None and snap.period.is_finished:
                 self._settled_ids.add(mid)
                 del self._pending_settle[mid]
                 log.info(

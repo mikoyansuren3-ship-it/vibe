@@ -53,6 +53,18 @@ def test_finished_match_settles_on_regulation_score():
     assert (snap.home_score, snap.away_score) == (2, 2)  # not 3-3
 
 
+def test_interrupted_match_marked_abandoned():
+    """An INTERRUPTED fixture (no valid 90' result) must be flagged 'abandoned', not '1H live'."""
+    fixture = {
+        "fixture": {"id": 9, "status": {"short": "INT", "elapsed": None}},
+        "teams": {"home": {"name": "France"}, "away": {"name": "Iraq"}},
+        "goals": {"home": 1, "away": 0},
+        "score": {"fulltime": {"home": None, "away": None}},
+    }
+    snap = snapshot_from_payload(fixture)
+    assert snap.status == "abandoned"
+
+
 def test_parse_period():
     assert parse_period("2H") is MatchPeriod.SECOND_HALF
     assert parse_period("FT") is MatchPeriod.FULL_TIME

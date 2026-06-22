@@ -171,6 +171,18 @@ async def test_settles_on_a_later_poll_not_just_the_drop_poll(rt, match_factory)
     assert any(s.period is MatchPeriod.FULL_TIME for s in rt.db.iter_match_snapshots("m1"))
 
 
+async def test_abandoned_match_stops_retrying_without_settling(rt, match_factory):
+    """An interrupted/abandoned match must stop retrying immediately and never get an FT tick."""
+    abandoned = match_factory(match_id="ab1", minute=45, period=MatchPeriod.FIRST_HALF,
+                              status="abandoned")
+    prov = _FinishingProvider(abandoned, not_finished=abandoned, finish_after=99)
+    orch = Orchestrator(rt, prov, trade=False)
+    orch._live_ids = {"ab1"}
+    await orch._settle_dropped(current_ids=set())
+    assert "ab1" in orch._settled_ids and "ab1" not in orch._pending_settle  # done, not looping
+    assert not any(s.period is MatchPeriod.FULL_TIME for s in rt.db.iter_match_snapshots("ab1"))
+
+
 async def test_reappearing_match_clears_pending(rt, match_factory):
     """A match that flaps out then back to live must not be force-settled."""
     not_ft = match_factory(match_id="m1", minute=90, period=MatchPeriod.SECOND_HALF)
