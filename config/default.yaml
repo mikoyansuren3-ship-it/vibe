@@ -61,14 +61,17 @@ model:
   draw_rho: -0.05             # Dixon-Coles low-score dependence correction
   # Live blending: how much weight to put on observed live xG vs the prior rate
   # when projecting remaining-match goals. 0 = ignore live xG, 1 = trust it fully.
-  live_xg_weight: 0.6
-  red_card_xg_penalty: 0.55   # multiply a team's remaining rate by this per net red card
+  # NOTE: the five constants below were FITTED on 128 real World Cup matches
+  # (2018+2022 StatsBomb) via `wck fit --data data/wc_all.jsonl` (2026-06-22):
+  # 128-match logloss 0.8008->0.7896, Brier 0.4489->0.4443, ECE 0.0401->0.0309.
+  live_xg_weight: 0.3         # fitted (was 0.6) — live xG less informative than assumed
+  red_card_xg_penalty: 0.45   # fitted (was 0.55); multiply remaining rate per net red card
   max_goals: 12               # truncation for the scoreline distribution
   # Behavioural constants (fit via `wck fit`, see modeling/fit.py). Config-driven so
   # they are no longer hard-coded magic numbers.
-  elo_tilt: 0.25              # how strongly Elo diff tilts the prior scoring split
-  leader_mult: 0.97          # remaining-rate multiplier for the leading team
-  chaser_mult: 1.06          # remaining-rate multiplier for the chasing team
+  elo_tilt: 0.3              # fitted (was 0.25) — steeper favorites; real favorites win more
+  leader_mult: 0.92          # fitted (was 0.97); remaining-rate multiplier for the leader
+  chaser_mult: 1.1           # fitted (was 1.06); remaining-rate multiplier for the chaser
 
 edge:
   min_edge: 0.05              # raw |model - market| threshold (probability points)

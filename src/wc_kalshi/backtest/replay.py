@@ -303,6 +303,13 @@ class Backtester:
             ticks = _bucket_market_by_tick(match_snaps, market_snaps)
             st = MatchState(match_id)
             for match, mk in ticks:
+                # Capture each market's mid by minute for non-degenerate CLV references
+                # (pre-off / +5min), same as run_historical.
+                for s in mk:
+                    if s.yes_mid_prob is not None:
+                        self._mid_history.setdefault(s.market_ticker, []).append(
+                            (match.minute, s.yes_mid_prob)
+                        )
                 summary = await self.processor.process(match, mk, st)  # noqa: F841
             n_fills += st.n_fills
             delta = self.rt.portfolio.realized_pnl - prev_realized

@@ -31,10 +31,13 @@ class Orchestrator:
         self._stop = asyncio.Event()
         self._flatten_requested = False
         self._last_live: list[MatchSnapshot] = []
-        # Match-ids seen live last poll, and those whose final state we've captured, so a
-        # match that drops out of fetch_live (finished) gets its settled tick recorded once.
+        # Settlement tracking: matches seen live last poll, those awaiting a settled tick
+        # (retried each poll until finished — the API lags between dropping a match from the
+        # live feed and marking it FT), and those already settled.
         self._live_ids: set[str] = set()
+        self._pending_settle: dict[str, int] = {}  # match_id -> settle attempts
         self._settled_ids: set[str] = set()
+        self._settle_max_attempts = 40  # ~ minutes of retrying before giving up
 
     def stop(self) -> None:
         self._stop.set()
@@ -86,23 +89,37 @@ class Orchestrator:
             log.exception("match handling failed", extra={"match_id": match.match_id, "err": str(exc)})
 
     async def _settle_dropped(self, current_ids: set[str]) -> None:
-        """For each match that was live last poll but isn't now, fetch its final state once
-        and run it through the pipeline so the outcome settles (enables CLV/calibration)."""
+        """Capture the settled state of matches that have left the live feed.
+
+        A match dropping from ``fetch_live`` doesn't mean the API reports it FT yet, so we
+        keep RETRYING each poll until it's finished (or we give up), rather than checking
+        only the single poll it disappeared — otherwise a match that isn't FT on that exact
+        poll is forgotten and never settles.
+        """
         for mid in self._live_ids - current_ids - self._settled_ids:
+            self._pending_settle.setdefault(mid, 0)
+        self._live_ids = current_ids
+        for mid in list(self._pending_settle):
+            if mid in current_ids:  # came back live (transient flap) — stop trying
+                del self._pending_settle[mid]
+                continue
+            self._pending_settle[mid] += 1
             try:
                 snap = await self.provider.fetch_fixture(mid)
             except Exception as exc:  # one bad settle must not stall the loop
                 log.warning("settlement fetch failed", extra={"match_id": mid, "err": str(exc)})
-                continue
-            if snap is None or not snap.period.is_finished:
-                continue  # transient drop (not actually finished) — retry next poll
-            self._settled_ids.add(mid)
-            log.info(
-                "captured final state",
-                extra={"match_id": mid, "score": f"{snap.home_score}-{snap.away_score}"},
-            )
-            await self._handle(snap)
-        self._live_ids = current_ids
+                snap = None
+            if snap is not None and snap.period.is_finished:
+                self._settled_ids.add(mid)
+                del self._pending_settle[mid]
+                log.info(
+                    "captured final state",
+                    extra={"match_id": mid, "score": f"{snap.home_score}-{snap.away_score}"},
+                )
+                await self._handle(snap)
+            elif self._pending_settle[mid] >= self._settle_max_attempts:
+                log.warning("settlement gave up (never reported FT)", extra={"match_id": mid})
+                del self._pending_settle[mid]
 
     async def run(self, *, max_ticks: int | None = None) -> None:
         rt = self.rt

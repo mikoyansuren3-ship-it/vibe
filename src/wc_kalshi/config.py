@@ -103,15 +103,16 @@ class ModelSection(BaseModel):
     base_away_xg: float = 1.20
     home_advantage: float = 0.20
     draw_rho: float = -0.05
-    live_xg_weight: float = 0.6
-    red_card_xg_penalty: float = 0.55
+    # Defaults below were fitted on 128 real World Cup matches (see config/default.yaml).
+    live_xg_weight: float = 0.3
+    red_card_xg_penalty: float = 0.45
     max_goals: int = 12
     # Behavioural constants — previously hard-coded magic numbers, now config-driven
     # so they can be fit against historical data (see modeling/fit.py) and overridden
     # per series without code edits.
-    elo_tilt: float = 0.25  # how strongly Elo diff tilts the prior scoring split
-    leader_mult: float = 0.97  # remaining-rate multiplier for the team that's ahead
-    chaser_mult: float = 1.06  # remaining-rate multiplier for the team that's behind
+    elo_tilt: float = 0.3  # how strongly Elo diff tilts the prior scoring split
+    leader_mult: float = 0.92  # remaining-rate multiplier for the team that's ahead
+    chaser_mult: float = 1.1  # remaining-rate multiplier for the team that's behind
 
 
 class EdgeSection(BaseModel):
