@@ -28,6 +28,10 @@ from .poisson import one_x_two
 _LEADER_MULT = 0.97  # leaders protect (lower remaining rate)
 _CHASER_MULT = 1.06  # chasers push (higher remaining rate)
 _ELO_TILT = 0.25  # how strongly Elo difference tilts the prior scoring split
+# Default rating for a team missing from the Elo table. Used so the Elo tilt still applies
+# when ONE side is unrated (e.g. a smaller WC nation), instead of dropping to a flat,
+# home-biased prior that badly under-rates the rated favourite. ~ a weak-side baseline.
+_DEFAULT_ELO = 1650.0
 
 
 class ModelConfigLike:
@@ -61,8 +65,14 @@ class DixonColesInplayModel(ProbabilityModel):
         base_h = self.cfg.base_home_xg
         base_a = self.cfg.base_away_xg
         ctx = match.context
-        if ctx and ctx.home_elo is not None and ctx.away_elo is not None:
-            diff = (ctx.home_elo - ctx.away_elo) / 400.0
+        # Apply the Elo tilt whenever AT LEAST one side is rated: default the unrated side
+        # to a weak baseline rather than dropping the tilt entirely (which would let the
+        # home/away base split alone decide, badly under-rating a rated favourite who is
+        # listed "away" — e.g. Algeria vs an unrated Jordan).
+        if ctx and (ctx.home_elo is not None or ctx.away_elo is not None):
+            he = ctx.home_elo if ctx.home_elo is not None else _DEFAULT_ELO
+            ae = ctx.away_elo if ctx.away_elo is not None else _DEFAULT_ELO
+            diff = (he - ae) / 400.0
             tilt = 10 ** (self.elo_tilt * diff)
             home = base_h * tilt
             away = base_a / tilt

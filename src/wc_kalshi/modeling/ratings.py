@@ -35,6 +35,9 @@ TEAM_ELO: dict[str, float] = {
     "Costa Rica": 1700, "Cape Verde": 1700, "Bolivia": 1690, "Qatar": 1680,
     "Panama": 1680, "Jamaica": 1660, "UAE": 1660, "Honduras": 1660,
     "New Zealand": 1620,
+    # Added for the 2026 field (illustrative, like the rest — replace with a real feed).
+    "Bosnia and Herzegovina": 1740, "Uzbekistan": 1630, "Jordan": 1560,
+    "Haiti": 1520, "Curacao": 1500,
 }
 
 # 2026 World Cup hosts — used for the neutral-venue heuristic.
@@ -61,6 +64,11 @@ _ALIASES: dict[str, str] = {
     "democratic republic of the congo": "DR Congo",
     "republic of ireland": "Ireland",
     "united arab emirates": "UAE",
+    # Provider naming variants (e.g. API-Football) -> our canonical key.
+    "cape verde islands": "Cape Verde",
+    "bosnia & herzegovina": "Bosnia and Herzegovina",
+    "curaçao": "Curacao",
+    "ivory coast": "Ivory Coast",
 }
 
 _CANON = {k.lower(): k for k in TEAM_ELO}
