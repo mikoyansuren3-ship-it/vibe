@@ -164,7 +164,9 @@ def snapshot_from_payload(
         away=away_stats,
         status=status_str,
         context=context,
-        raw=fixture,
+        # Persist the events feed alongside the fixture so goal/card/sub timing + players
+        # are replayable later (goal-timing, per-half settlement, player-prop seeds).
+        raw={**fixture, "events": events_response} if events_response is not None else fixture,
     )
 
 
@@ -226,6 +228,7 @@ class APIFootballProvider(FootballDataProvider):
         max_retries: int = 3,
         fetch_statistics: bool = True,
         fetch_context: bool = True,
+        fetch_events: bool = True,
         league_id: int | None = None,
         budget: "RequestBudget | None" = None,
     ) -> None:
@@ -233,6 +236,7 @@ class APIFootballProvider(FootballDataProvider):
         self.max_retries = max_retries
         self.fetch_statistics = fetch_statistics
         self.fetch_context = fetch_context  # lineups + injuries (fetched once per match)
+        self.fetch_events = fetch_events  # goals/cards/subs w/ minute+player
         self._ctx_cache: dict[int, dict[str, Any]] = {}
         # When set, only poll this league's live fixtures (e.g. 1 = FIFA World Cup).
         self.league_id = league_id
@@ -278,7 +282,8 @@ class APIFootballProvider(FootballDataProvider):
                     ).get("response")
                 except Exception as exc:  # degrade gracefully
                     log.warning("statistics fetch failed", extra={"err": str(exc)})
-            snap = snapshot_from_payload(fixture, stats, None)
+            events = await self._fetch_events(fixture_id)
+            snap = snapshot_from_payload(fixture, stats, events)
             if self.fetch_context and fixture_id is not None:
                 await self._apply_context(snap, fixture_id)
             snapshots.append(snap)
@@ -304,7 +309,18 @@ class APIFootballProvider(FootballDataProvider):
                 ).get("response")
             except Exception as exc:
                 log.warning("statistics fetch failed (settle)", extra={"err": str(exc)})
-        return snapshot_from_payload(fixture, stats, None)
+        events = await self._fetch_events(fixture_id)
+        return snapshot_from_payload(fixture, stats, events)
+
+    async def _fetch_events(self, fixture_id: Any) -> list[dict[str, Any]] | None:
+        """Goals/cards/subs with minute + player (for goal timing, per-half, props)."""
+        if not self.fetch_events or fixture_id is None:
+            return None
+        try:
+            return (await self._get("/fixtures/events", {"fixture": fixture_id})).get("response")
+        except Exception as exc:  # degrade gracefully
+            log.warning("events fetch failed", extra={"err": str(exc)})
+            return None
 
     async def _apply_context(self, snap: MatchSnapshot, fixture_id: int) -> None:
         """Fetch lineups + injuries once per fixture (cached) and attach to the snapshot."""

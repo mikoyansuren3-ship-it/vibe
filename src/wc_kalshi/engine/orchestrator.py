@@ -9,6 +9,7 @@ the global kill switch.
 from __future__ import annotations
 
 import asyncio
+import time
 
 from ..eventbus import Event, EventType
 from ..ingestion.football.base import FootballDataProvider
@@ -38,6 +39,7 @@ class Orchestrator:
         self._pending_settle: dict[str, int] = {}  # match_id -> settle attempts
         self._settled_ids: set[str] = set()
         self._settle_max_attempts = 40  # ~ minutes of retrying before giving up
+        self._extra_last: dict[str, float] = {}  # match_id -> last extra-market capture (mono)
 
     def stop(self) -> None:
         self._stop.set()
@@ -85,10 +87,37 @@ class Orchestrator:
             snaps = await rt.market_feed.snapshots_for_match(match)
             for s in snaps:
                 rt.db.add_market_snapshot(s)
+            await self._capture_extra_markets(match, snaps)
             st = self.states.setdefault(match.match_id, MatchState(match.match_id))
             await self.processor.process(match, snaps, st)
         except Exception as exc:  # one bad match must not kill the whole run
             log.exception("match handling failed", extra={"match_id": match.match_id, "err": str(exc)})
+
+    async def _capture_extra_markets(self, match: MatchSnapshot, snaps: list) -> None:
+        """Record the broader per-match market set (Total/Spread/BTTS/1H/corners/…) into
+        raw_market_quotes. Throttled, live-feed only — for researching the roadmap markets."""
+        rt = self.rt
+        if not getattr(rt.cfg.kalshi, "capture_extra_markets", False):
+            return
+        client = getattr(rt.market_feed, "client", None)
+        if client is None or not snaps:  # paper/sim feed has no client
+            return
+        # The KXWCGAME event ticker shares its suffix with every other per-match series.
+        ev = snaps[0].event_ticker or ""
+        if "-" not in ev:
+            return
+        now = time.monotonic()
+        interval = rt.cfg.kalshi.extra_markets_interval_seconds
+        if now - self._extra_last.get(match.match_id, 0.0) < interval:
+            return
+        self._extra_last[match.match_id] = now
+        from ..ingestion.kalshi.extra_markets import capture_extra_markets
+
+        try:
+            rows = await capture_extra_markets(client, match.match_id, ev.split("-", 1)[1])
+            rt.db.add_raw_market_quotes(rows)
+        except Exception as exc:
+            log.warning("extra-market capture failed", extra={"match_id": match.match_id, "err": str(exc)})
 
     async def _settle_dropped(self, current_ids: set[str]) -> None:
         """Capture the settled state of matches that have left the live feed.

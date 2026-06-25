@@ -66,6 +66,7 @@ def build_football_provider(cfg: "AppConfig") -> FootballDataProvider:
             max_retries=cfg.football.max_retries,
             fetch_statistics=cfg.football.apifootball_fetch_statistics,
             fetch_context=cfg.football.apifootball_fetch_context,
+            fetch_events=cfg.football.apifootball_fetch_events,
             league_id=cfg.football.apifootball_league_id,
             budget=budget,
         )

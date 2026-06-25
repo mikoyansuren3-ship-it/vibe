@@ -144,7 +144,8 @@ def _two_league_fixtures():
 async def test_apifootball_filters_to_league_client_side(monkeypatch):
     from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
 
-    p = APIFootballProvider(api_key="x", fetch_statistics=False, fetch_context=False, league_id=1)
+    p = APIFootballProvider(api_key="x", fetch_statistics=False, fetch_context=False,
+                            fetch_events=False, league_id=1)
     captured: dict = {}
 
     async def fake_get(endpoint, params):
@@ -161,7 +162,8 @@ async def test_apifootball_filters_to_league_client_side(monkeypatch):
 async def test_apifootball_no_filter_keeps_all_leagues(monkeypatch):
     from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
 
-    p = APIFootballProvider(api_key="x", fetch_statistics=False, fetch_context=False, league_id=None)
+    p = APIFootballProvider(api_key="x", fetch_statistics=False, fetch_context=False,
+                            fetch_events=False, league_id=None)
 
     async def fake_get(endpoint, params):
         return _two_league_fixtures()
