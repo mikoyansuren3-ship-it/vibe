@@ -18,9 +18,11 @@ to 1) is what the unit tests pin down.
 
 from __future__ import annotations
 
+import numpy as np
+
 from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities
 from .base import ProbabilityModel
-from .poisson import one_x_two
+from .poisson import one_x_two, remaining_goal_matrix
 
 # Fallback defaults for the behavioural constants, used only when a duck-typed config
 # omits them. The production path reads these from ModelSection (config-driven, fittable
@@ -185,3 +187,24 @@ class DixonColesInplayModel(ProbabilityModel):
                 "net_red_cards": match.net_red_cards,
             },
         ).normalized()
+
+    def scoreline_matrix(self, match: MatchSnapshot) -> np.ndarray:
+        """Joint final-score distribution ``M[i, j] = P(home_final=i, away_final=j)``.
+
+        The basis for every scoreline-derived market (total / spread / BTTS / correct-score
+        / team-total / margin — see modeling/derived.py). Uses the SAME remaining-goal
+        matrix ``predict`` collapses into 1X2, shifted by the current score.
+        """
+        hs, as_ = match.home_score, match.away_score
+        if match.period is MatchPeriod.FULL_TIME or match.status == "finished":
+            m = np.zeros((hs + 1, as_ + 1))
+            m[hs, as_] = 1.0  # degenerate on the actual result
+            return m
+        lam, mu = self._remaining_rates(match)
+        rem = remaining_goal_matrix(
+            lam, mu, rho=self._effective_rho(match), max_goals=self.cfg.max_goals
+        )
+        n = rem.shape[0]
+        m = np.zeros((n + hs, n + as_))
+        m[hs : hs + n, as_ : as_ + n] = rem  # shift remaining goals onto the current score
+        return m
