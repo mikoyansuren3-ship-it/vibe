@@ -181,6 +181,18 @@
       "n_fills": 16
     },
     {
+      "match_id": "1489411",
+      "home_team": "Paraguay",
+      "away_team": "Australia",
+      "outcome": "D",
+      "final_score": [
+        0,
+        0
+      ],
+      "n_ticks": 478,
+      "n_fills": 6
+    },
+    {
       "match_id": "1489412",
       "home_team": "Tunisia",
       "away_team": "Netherlands",
@@ -202,7 +214,7 @@
         0
       ],
       "n_ticks": 629,
-      "n_fills": 8
+      "n_fills": 9
     },
     {
       "match_id": "1539009",
@@ -214,7 +226,7 @@
         1
       ],
       "n_ticks": 284,
-      "n_fills": 6
+      "n_fills": 7
     },
     {
       "match_id": "1539010",
@@ -241,6 +253,18 @@
       "n_fills": 11
     },
     {
+      "match_id": "1539012",
+      "home_team": "T\u00fcrkiye",
+      "away_team": "USA",
+      "outcome": "H",
+      "final_score": [
+        3,
+        2
+      ],
+      "n_ticks": 514,
+      "n_fills": 13
+    },
+    {
       "match_id": "1539017",
       "home_team": "France",
       "away_team": "Iraq",
@@ -250,36 +274,36 @@
         0
       ],
       "n_ticks": 315,
-      "n_fills": 4
+      "n_fills": 3
     }
   ],
   "aggregate": {
-    "n_matches": 21,
-    "n_fills": 159,
+    "n_matches": 23,
+    "n_fills": 179,
     "stake_mode": "kelly",
-    "realized_pnl": 49.9,
+    "realized_pnl": 74.45,
     "fees_paid": 0.0,
-    "gross_pnl": 49.9,
-    "roi": 0.499,
-    "t_stat": 0.28,
+    "gross_pnl": 74.45,
+    "roi": 0.7445,
+    "t_stat": 0.37,
     "pnl_ci": [
-      -14.45,
-      19.326
+      -13.692,
+      19.685
     ],
-    "avg_clv": 0.0931,
-    "clv_n": 159,
-    "avg_clv_preoff": -0.1039,
-    "clv_n_preoff": 159,
-    "avg_clv_5m": 0.0037,
-    "clv_n_5m": 144,
+    "avg_clv": 0.085,
+    "clv_n": 179,
+    "avg_clv_preoff": -0.0934,
+    "clv_n_preoff": 179,
+    "avg_clv_5m": 0.0051,
+    "clv_n_5m": 163,
     "starting_bankroll": 100.0,
-    "ending_equity": 149.9,
+    "ending_equity": 174.45,
     "calibration": {
-      "n": 285.0,
-      "brier": 0.4085,
-      "log_loss": 0.6965,
-      "ece": 0.0408,
-      "calibration_factor": 0.7962
+      "n": 317.0,
+      "brier": 0.4404,
+      "log_loss": 0.8243,
+      "ece": 0.0308,
+      "calibration_factor": 0.8462
     }
   },
   "config": {
@@ -298,6 +322,6 @@
     "late_taper_minutes": 15,
     "late_taper_floor": 0.34,
     "bankroll": 100.0,
-    "kelly_factor": 0.7962
+    "kelly_factor": 0.8462
   }
 }
