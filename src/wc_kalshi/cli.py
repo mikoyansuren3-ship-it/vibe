@@ -174,6 +174,22 @@ async def _cmd_replay(args) -> int:
     return 0
 
 
+async def _cmd_export(args) -> int:
+    from .backtest.export import export_bundles
+
+    cfg = _load(args)
+    if getattr(args, "bankroll", None) is not None:
+        cfg.risk.starting_bankroll = args.bankroll
+    ids = [args.match_id] if getattr(args, "match_id", None) else None
+    manifest = await export_bundles(cfg, args.db, args.out, match_ids=ids)
+    print(
+        f"exported {len(manifest['matches'])} bundles to {args.out} "
+        f"(aggregate: {manifest['aggregate']['n_fills']} fills, "
+        f"CLV preoff {manifest['aggregate']['avg_clv_preoff']})"
+    )
+    return 0
+
+
 async def _cmd_historical(args) -> int:
     from .backtest.historical import load_historical_file
     from .backtest.replay import Backtester
@@ -405,6 +421,12 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--bankroll", type=float, default=None, help="starting fake bankroll $ (e.g. 100)")
     rp.add_argument("--stake-mode", choices=["kelly", "fixed"], default="kelly")
 
+    ex = sub.add_parser("export-bundles", help="export DB → per-match JSON bundles for the web simulator")
+    ex.add_argument("--db", required=True, help="path to a recorder sqlite db")
+    ex.add_argument("--out", default="web/public/bundles", help="output dir for bundles + manifest")
+    ex.add_argument("--match-id", default=None, help="export a single match (e.g. for live)")
+    ex.add_argument("--bankroll", type=float, default=None, help="starting fake bankroll $ (default cfg)")
+
     h = sub.add_parser("historical", help="backtest against REAL xG + market data (JSON)")
     h.add_argument("--data", required=True, help="path to historical JSON/JSONL (see backtest/historical.py)")
     h.add_argument("--no-trade", action="store_true")
@@ -450,6 +472,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_cmd_replay(args))
         if args.command == "historical":
             return asyncio.run(_cmd_historical(args))
+        if args.command == "export-bundles":
+            return asyncio.run(_cmd_export(args))
         if args.command == "fit":
             return asyncio.run(_cmd_fit(args))
         if args.command == "statsbomb":
