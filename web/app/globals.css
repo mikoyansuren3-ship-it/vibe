@@ -203,10 +203,20 @@ input[type=range] { accent-color: var(--accent); }
 .betcard > .head .chev { color: var(--faint); transition: transform .15s; }
 .betcard.open > .head .chev { transform: rotate(90deg); }
 .betlist { border-top: 1px solid var(--border); }
-.betrow { display: grid; gap: 10px; align-items: center; padding: 8px 15px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.betrow { display: flex; gap: 10px; align-items: center; padding: 8px 15px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
 .betrow:last-child { border-bottom: none; }
-.betrow .who { display: flex; align-items: center; gap: 7px; }
-.betrow .gname { color: var(--faint); font-size: 11px; }
+.betrow .who { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
+.betrow .gname { color: var(--faint); font-size: 11px; flex-shrink: 0; }
+.betrow .spring { margin-left: auto; }
+.betrow .stake { color: var(--muted); }
+.betmoney { display: flex; gap: 10px; align-items: baseline; }
+
+/* bets summary tiles */
+.betsum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; margin-bottom: 14px; }
+.betsum .cell { background: var(--panel); padding: 12px 15px; }
+.betsum .k { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+.betsum .v { font-size: 20px; font-weight: 680; margin-top: 3px; letter-spacing: -0.01em; }
+@media (max-width: 640px) { .betsum { grid-template-columns: repeat(2, 1fr); } }
 .outdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .tag2 { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 99px; letter-spacing: 0.03em; }
 .tag2.back { background: rgba(63,185,80,0.15); color: var(--green); }

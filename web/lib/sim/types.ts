@@ -100,8 +100,10 @@ export interface Decision {
   execCents: number;
   category: DecisionCategory;
   contracts: number; // >0 only when taken
+  staked: number; // dollars at risk (0 for considered-but-not-taken)
   clvPreoff: number | null;
   won: boolean | null; // settled result for taken bets
+  pnl: number | null; // settled profit/loss in dollars (taken bets only)
 }
 
 export interface SimResult {

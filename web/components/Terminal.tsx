@@ -117,7 +117,8 @@ export function Terminal({
       <div className="fills">
         {fillsSoFar.length === 0 && <div className="note" style={{ marginTop: 0 }}>No bets yet — the bot is waiting for a worthwhile edge.</div>}
         {[...fillsSoFar].reverse().map((f, i) => {
-          const won = atEnd ? outcomeWon(f.outcome, bundle.outcome) : null;
+          // A back wins if the outcome occurs; a fade wins if it does NOT.
+          const won = atEnd ? (f.action === "buy" ? outcomeWon(f.outcome, bundle.outcome) : !outcomeWon(f.outcome, bundle.outcome)) : null;
           return (
             <div className="fill" style={{ gridTemplateColumns: adv ? "40px 46px 1fr 56px" : "40px 1fr auto" }} key={i}>
               <span className="mono" style={{ color: "var(--faint)" }}>{f.minute}′</span>

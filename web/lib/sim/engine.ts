@@ -61,13 +61,16 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
     if (category !== "taken" && lastKeyByTicker[ticker] === key) return;
     lastKeyByTicker[ticker] = key;
     const ref = bundle.preoff[s.outcome];
+    const p = s.execPrice ?? 0;
+    const cost = s.action === "buy" ? p : 1 - p; // capital at risk per contract
     decisions.push({
       tickIndex: ti, minute, outcome: s.outcome, action: s.action as "buy" | "sell",
       modelP: s.modelP, marketImplied: s.implied, netEdge: s.netEdge,
-      execCents: Math.round((s.execPrice ?? 0) * 100),
+      execCents: Math.round(p * 100),
       category, contracts,
+      staked: category === "taken" ? contracts * cost : 0,
       clvPreoff: ref != null && s.execPrice != null && s.action != null ? signedClv(s.action, s.execPrice, ref) : null,
-      won: null,
+      won: null, pnl: null,
     });
   };
 
@@ -129,7 +132,15 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
       clvN += 1;
     }
   }
-  for (const d of decisions) if (d.category === "taken") d.won = outcomeWon(d.outcome, bundle.outcome);
+  for (const d of decisions) {
+    if (d.category !== "taken") continue;
+    // A back (buy) wins if the outcome occurs; a fade (sell) wins if it does NOT.
+    const occurred = outcomeWon(d.outcome, bundle.outcome);
+    const betWon = d.action === "buy" ? occurred : !occurred;
+    d.won = betWon;
+    const p = d.execCents / 100;
+    d.pnl = betWon ? (d.action === "buy" ? d.contracts * (1 - p) : d.contracts * p) : -d.staked;
+  }
 
   return {
     fills,
