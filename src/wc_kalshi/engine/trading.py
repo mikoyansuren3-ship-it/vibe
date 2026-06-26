@@ -25,6 +25,7 @@ from ..models.schemas import (
     ProposalStatus,
     TradeProposal,
 )
+from ..modeling.xg_proxy import observed_xg
 from ..util import new_id, utcnow
 
 if TYPE_CHECKING:
@@ -45,7 +46,8 @@ def build_thesis(
     """Human-readable rationale (incentive) + risk note for a proposal."""
     label = _outcome_label(match, edge.outcome)
     verb = "back" if edge.action is OrderAction.BUY else "fade"
-    xg_h, xg_a = match.home.xg, match.away.xg
+    xg_h = observed_xg(match.home) or 0.0
+    xg_a = observed_xg(match.away) or 0.0
     drivers: list[str] = []
     if abs(xg_h - xg_a) >= 0.3:
         leader = match.home_team if xg_h > xg_a else match.away_team

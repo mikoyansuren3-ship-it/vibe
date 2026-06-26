@@ -119,6 +119,12 @@ class ModelSection(BaseModel):
     elo_tilt: float = 0.3  # how strongly Elo diff tilts the prior scoring split
     leader_mult: float = 0.92  # remaining-rate multiplier for the team that's ahead
     chaser_mult: float = 1.1  # remaining-rate multiplier for the team that's behind
+    # Shot-based xG proxy (modeling/xg_proxy.py) — used when the provider omits live
+    # xG (API-Football's in-play WC feed has no expected_goals). Fitted by least
+    # squares on 128 StatsBomb WC matches (see scripts/fit_xg_proxy.py).
+    xg_proxy_sot: float = 0.1865  # xG per shot on target
+    xg_proxy_off: float = 0.0665  # xG per off-target / blocked shot
+    xg_proxy_big_chance: float = 0.0  # reserved; WC live feed omits big chances
 
 
 class EdgeSection(BaseModel):

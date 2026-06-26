@@ -8,25 +8,29 @@ consume, and the values are logged for audit and shown on the dashboard.
 from __future__ import annotations
 
 from ..models.schemas import MatchSnapshot
+from ..modeling.xg_proxy import observed_xg
 
 
 def match_features(match: MatchSnapshot) -> dict[str, float]:
     elapsed = max(1, min(match.minute, 90))
     ctx = match.context
     home, away = match.home, match.away
+    # Observed xG (real if supplied, else shot-based proxy, else 0.0 when unknown).
+    hx = observed_xg(home) or 0.0
+    ax = observed_xg(away) or 0.0
     feats: dict[str, float] = {
         "minute": float(match.minute),
         "minutes_remaining": match.minutes_remaining,
         "time_fraction_played": min(1.0, match.minute / 90.0),
         "score_diff": float(match.score_diff),
         "total_goals": float(match.home_score + match.away_score),
-        "xg_home": home.xg,
-        "xg_away": away.xg,
-        "xg_diff": home.xg - away.xg,
-        "xg_rate_home": home.xg / elapsed,
-        "xg_rate_away": away.xg / elapsed,
-        "xg_minus_goals_home": home.xg - match.home_score,
-        "xg_minus_goals_away": away.xg - match.away_score,
+        "xg_home": hx,
+        "xg_away": ax,
+        "xg_diff": hx - ax,
+        "xg_rate_home": hx / elapsed,
+        "xg_rate_away": ax / elapsed,
+        "xg_minus_goals_home": hx - match.home_score,
+        "xg_minus_goals_away": ax - match.away_score,
         "shots_diff": float(home.shots - away.shots),
         "sot_diff": float(home.shots_on_target - away.shots_on_target),
         "big_chance_diff": float(home.big_chances - away.big_chances),
@@ -49,5 +53,5 @@ def match_features(match: MatchSnapshot) -> dict[str, float]:
         if ctx.humidity_pct is not None:
             feats["humidity_pct"] = ctx.humidity_pct
     # Simple momentum proxy: recent xG dominance scaled by pressure.
-    feats["momentum"] = (home.xg - away.xg) + 0.1 * (home.shots_on_target - away.shots_on_target)
+    feats["momentum"] = (hx - ax) + 0.1 * (home.shots_on_target - away.shots_on_target)
     return feats

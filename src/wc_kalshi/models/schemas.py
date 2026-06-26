@@ -66,7 +66,9 @@ class MatchPeriod(str, enum.Enum):
 class TeamStats(BaseModel):
     """Per-team live statistics. All counters are cumulative match totals."""
 
-    xg: float = 0.0
+    # None = the provider did not supply expected goals for this tick (use the
+    # shot-based proxy in modeling/xg_proxy.py); a float (including 0.0) is a real value.
+    xg: float | None = None
     shots: int = 0
     shots_on_target: int = 0
     big_chances: int = 0

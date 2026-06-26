@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities
+from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities, TeamStats
 from .base import ProbabilityModel
 from .poisson import one_x_two, remaining_goal_matrix
+from .xg_proxy import DEFAULT_W_BIG_CHANCE, DEFAULT_W_OFF, DEFAULT_W_SOT, observed_xg
 
 # Fallback defaults for the behavioural constants, used only when a duck-typed config
 # omits them. The production path reads these from ModelSection (config-driven, fittable
@@ -85,6 +86,19 @@ class DixonColesInplayModel(ProbabilityModel):
             home *= 1.0 + self.cfg.home_advantage
         return max(0.05, home), max(0.05, away)
 
+    def _observed_xg(self, team: TeamStats) -> float | None:
+        """Best live xG for one side: real provider xG → shot proxy → unknown.
+
+        Uses the fitted proxy weights from config (falling back to the module
+        defaults for duck-typed test configs that omit them).
+        """
+        return observed_xg(
+            team,
+            w_sot=float(getattr(self.cfg, "xg_proxy_sot", DEFAULT_W_SOT)),
+            w_off=float(getattr(self.cfg, "xg_proxy_off", DEFAULT_W_OFF)),
+            w_big_chance=float(getattr(self.cfg, "xg_proxy_big_chance", DEFAULT_W_BIG_CHANCE)),
+        )
+
     # -- remaining-rate projection --------------------------------------- #
     def _remaining_rates(self, match: MatchSnapshot) -> tuple[float, float]:
         elapsed = min(max(match.minute, 0), 90)
@@ -93,11 +107,14 @@ class DixonColesInplayModel(ProbabilityModel):
         prior_h_pm = home_full / 90.0
         prior_a_pm = away_full / 90.0
 
-        if elapsed >= 1:
-            obs_h_pm = match.home.xg / elapsed
-            obs_a_pm = match.away.xg / elapsed
-        else:
-            obs_h_pm, obs_a_pm = prior_h_pm, prior_a_pm
+        # Observed scoring rate from live xG. When the provider supplies no xG (e.g.
+        # API-Football's in-play WC feed) we reconstruct it from shots; when even that
+        # is unavailable we fall back to the prior PER SIDE, so a missing signal never
+        # masquerades as "zero chances created" (which would over-rate the draw).
+        obs_h = self._observed_xg(match.home) if elapsed >= 1 else None
+        obs_a = self._observed_xg(match.away) if elapsed >= 1 else None
+        obs_h_pm = obs_h / elapsed if obs_h is not None else prior_h_pm
+        obs_a_pm = obs_a / elapsed if obs_a is not None else prior_a_pm
 
         # Live weight grows with minutes played, capped by config.
         w = self.cfg.live_xg_weight * (elapsed / 90.0)

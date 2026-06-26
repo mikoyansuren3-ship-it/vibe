@@ -84,7 +84,11 @@ def team_stats_from_statistics(stat_block: dict[str, Any] | None) -> TeamStats:
     stats.yellow_cards = _to_int(items.get("yellow cards"))
     stats.red_cards = _to_int(items.get("red cards"))
     stats.gk_saves = _to_int(items.get("goalkeeper saves"))
-    stats.xg = _to_float(items.get("expected_goals"))
+    # API-Football's in-play WC statistics omit ``expected_goals`` entirely. Leave xg
+    # as None when absent (do NOT coerce to 0.0) so the model can fall back to the
+    # shot-based proxy / prior instead of reading "no xG" as "no chances created".
+    xg_raw = items.get("expected_goals")
+    stats.xg = _to_float(xg_raw) if xg_raw is not None else None
     poss = _to_float(items.get("ball possession"))
     stats.possession = poss / 100.0 if poss > 1.0 else (poss or 0.5)
     pa = _to_float(items.get("passes %"))
