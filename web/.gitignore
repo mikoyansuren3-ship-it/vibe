@@ -1,0 +1,9 @@
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+.env*.local
+
+# next.js generated
+next-env.d.ts

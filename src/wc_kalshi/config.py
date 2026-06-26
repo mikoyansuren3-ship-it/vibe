@@ -62,6 +62,11 @@ class KalshiSection(BaseModel):
     max_retries: int = 4
     fee_coefficient: float = 0.07
     maker_fee_fraction: float = 0.25
+    # Recorder: also capture the broader per-match market set (Total/Spread/BTTS/1H/…) into
+    # raw_market_quotes, for researching the roadmap markets. Throttled separately from the
+    # match poll since it's many series per fixture. Off by default; on in the recorder.
+    capture_extra_markets: bool = False
+    extra_markets_interval_seconds: float = 60.0
 
 
 class FootballSection(BaseModel):
@@ -76,6 +81,7 @@ class FootballSection(BaseModel):
     apifootball_league_id: int | None = None
     apifootball_fetch_statistics: bool = True
     apifootball_fetch_context: bool = True  # lineups + injuries (once per match)
+    apifootball_fetch_events: bool = True  # goals/cards/subs w/ minute+player (goal timing)
     sim_tick_seconds: float = 1.0
     sim_minutes_per_tick: float = 1.0
     sim_seed: int = 42
@@ -113,6 +119,12 @@ class ModelSection(BaseModel):
     elo_tilt: float = 0.3  # how strongly Elo diff tilts the prior scoring split
     leader_mult: float = 0.92  # remaining-rate multiplier for the team that's ahead
     chaser_mult: float = 1.1  # remaining-rate multiplier for the team that's behind
+    # Shot-based xG proxy (modeling/xg_proxy.py) — used when the provider omits live
+    # xG (API-Football's in-play WC feed has no expected_goals). Fitted by least
+    # squares on 128 StatsBomb WC matches (see scripts/fit_xg_proxy.py).
+    xg_proxy_sot: float = 0.1865  # xG per shot on target
+    xg_proxy_off: float = 0.0665  # xG per off-target / blocked shot
+    xg_proxy_big_chance: float = 0.0  # reserved; WC live feed omits big chances
 
 
 class EdgeSection(BaseModel):
@@ -333,13 +345,19 @@ def load_config(
     config_path: str | os.PathLike[str] | None = None,
     *,
     load_env: bool = True,
+    use_local: bool = True,
 ) -> AppConfig:
-    """Load + validate configuration and resolve the (safe) run mode."""
+    """Load + validate configuration and resolve the (safe) run mode.
+
+    ``use_local=False`` skips the developer's git-ignored ``config/local.yaml`` so tests
+    are deterministic regardless of local overrides (fees, providers, capture flags, …).
+    """
     if load_env:
         load_dotenv(REPO_ROOT / ".env")
 
     merged = _load_yaml(DEFAULT_CONFIG)
-    merged = _deep_merge(merged, _load_yaml(LOCAL_CONFIG))
+    if use_local:
+        merged = _deep_merge(merged, _load_yaml(LOCAL_CONFIG))
 
     explicit = config_path or os.getenv("WCK_CONFIG")
     if explicit:

@@ -23,8 +23,9 @@ DATA_DIR = Path(__file__).parent / "data"
 
 @pytest.fixture
 def cfg():
-    # load_env=False so a developer's real .env never leaks into tests.
-    return load_config(load_env=False)
+    # load_env=False + use_local=False so a developer's real .env / config/local.yaml
+    # (fees, providers, capture flags) never leak into tests — keep them deterministic.
+    return load_config(load_env=False, use_local=False)
 
 
 @pytest.fixture

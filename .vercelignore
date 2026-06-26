@@ -1,0 +1,24 @@
+# Only the web/ app is deployed. Exclude all secrets, data, and the Python engine
+# so nothing sensitive is ever uploaded to Vercel (defense in depth alongside .gitignore).
+.env
+.env.*
+.venv/
+data/
+src/
+config/
+docs/
+tests/
+scripts/
+memory/
+*.sqlite3
+*.jsonl
+.git/
+.playwright-mcp/
+.pytest_cache/
+.ruff_cache/
+pyproject.toml
+requirements.txt
+README.md
+RUNBOOK.md
+web/node_modules/
+web/.next/

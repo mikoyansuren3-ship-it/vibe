@@ -13,6 +13,7 @@ from ..eventbus import Event, EventType
 from ..features.engineer import match_features
 from ..logging_setup import get_logger
 from ..market.implied import implied_from_markets
+from ..modeling.xg_proxy import observed_xg
 from ..models.schemas import MarketSnapshot, MatchSnapshot, OrderAction, Outcome, Probabilities
 from ..util import utcnow
 
@@ -417,7 +418,8 @@ class TickProcessor:
                 "minute": match.minute,
                 "period": match.period.value,
                 "score": f"{match.home_score}-{match.away_score}",
-                "xg": [round(match.home.xg, 2), round(match.away.xg, 2)],
+                "xg": [round(observed_xg(match.home) or 0.0, 2),
+                       round(observed_xg(match.away) or 0.0, 2)],
                 "red_cards": [match.home.red_cards, match.away.red_cards],
                 "model": {"home": probs.p_home, "draw": probs.p_draw, "away": probs.p_away},
                 "market": market_probs,

@@ -51,6 +51,27 @@ class MarketSnapshotRow(Base):
     data: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class RawMarketQuoteRow(Base):
+    """Generic capture of ANY per-match Kalshi market (Total/Spread/BTTS/1H/corners/…),
+    not just 1X2. Stores the structured strike so each series can be modelled later.
+    Separate from MarketSnapshotRow (which is the typed 1X2 the live strategy trades)."""
+
+    __tablename__ = "raw_market_quotes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[str] = mapped_column(String(64), index=True)
+    series: Mapped[str] = mapped_column(String(32), index=True)
+    market_ticker: Mapped[str] = mapped_column(String(96), index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    yes_sub_title: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    floor_strike: Mapped[float | None] = mapped_column(Float, nullable=True)
+    strike_type: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    yes_bid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    yes_ask: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(16))
+    data: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class ProbabilityRow(Base):
     __tablename__ = "probabilities"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -179,6 +200,13 @@ class Database:
                     data=snap.model_dump(mode="json"),
                 )
             )
+
+    def add_raw_market_quotes(self, rows: list[dict[str, Any]]) -> None:
+        """Batch-insert generic market quotes (see RawMarketQuoteRow / extra_markets.py)."""
+        if not rows:
+            return
+        with self.session() as s:
+            s.add_all([RawMarketQuoteRow(**r) for r in rows])
 
     def add_probabilities(self, probs: Probabilities) -> None:
         with self.session() as s:

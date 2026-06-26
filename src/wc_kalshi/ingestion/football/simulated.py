@@ -139,7 +139,7 @@ class SimMatch:
                 team.shots += 1
                 team.dangerous_attacks += 1
                 quality = min(0.97, self.rng.betavariate(1.6, 9.0))  # mean ~0.15
-                team.xg += quality
+                team.xg = (team.xg or 0.0) + quality  # xg defaults to None now
                 on_target = self.rng.random() < (0.30 + quality * 0.5)
                 if on_target:
                     team.shots_on_target += 1

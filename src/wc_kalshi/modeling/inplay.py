@@ -18,9 +18,12 @@ to 1) is what the unit tests pin down.
 
 from __future__ import annotations
 
-from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities
+import numpy as np
+
+from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities, TeamStats
 from .base import ProbabilityModel
-from .poisson import one_x_two
+from .poisson import one_x_two, remaining_goal_matrix
+from .xg_proxy import DEFAULT_W_BIG_CHANCE, DEFAULT_W_OFF, DEFAULT_W_SOT, observed_xg
 
 # Fallback defaults for the behavioural constants, used only when a duck-typed config
 # omits them. The production path reads these from ModelSection (config-driven, fittable
@@ -28,6 +31,10 @@ from .poisson import one_x_two
 _LEADER_MULT = 0.97  # leaders protect (lower remaining rate)
 _CHASER_MULT = 1.06  # chasers push (higher remaining rate)
 _ELO_TILT = 0.25  # how strongly Elo difference tilts the prior scoring split
+# Default rating for a team missing from the Elo table. Used so the Elo tilt still applies
+# when ONE side is unrated (e.g. a smaller WC nation), instead of dropping to a flat,
+# home-biased prior that badly under-rates the rated favourite. ~ a weak-side baseline.
+_DEFAULT_ELO = 1650.0
 
 
 class ModelConfigLike:
@@ -61,8 +68,14 @@ class DixonColesInplayModel(ProbabilityModel):
         base_h = self.cfg.base_home_xg
         base_a = self.cfg.base_away_xg
         ctx = match.context
-        if ctx and ctx.home_elo is not None and ctx.away_elo is not None:
-            diff = (ctx.home_elo - ctx.away_elo) / 400.0
+        # Apply the Elo tilt whenever AT LEAST one side is rated: default the unrated side
+        # to a weak baseline rather than dropping the tilt entirely (which would let the
+        # home/away base split alone decide, badly under-rating a rated favourite who is
+        # listed "away" — e.g. Algeria vs an unrated Jordan).
+        if ctx and (ctx.home_elo is not None or ctx.away_elo is not None):
+            he = ctx.home_elo if ctx.home_elo is not None else _DEFAULT_ELO
+            ae = ctx.away_elo if ctx.away_elo is not None else _DEFAULT_ELO
+            diff = (he - ae) / 400.0
             tilt = 10 ** (self.elo_tilt * diff)
             home = base_h * tilt
             away = base_a / tilt
@@ -73,6 +86,19 @@ class DixonColesInplayModel(ProbabilityModel):
             home *= 1.0 + self.cfg.home_advantage
         return max(0.05, home), max(0.05, away)
 
+    def _observed_xg(self, team: TeamStats) -> float | None:
+        """Best live xG for one side: real provider xG → shot proxy → unknown.
+
+        Uses the fitted proxy weights from config (falling back to the module
+        defaults for duck-typed test configs that omit them).
+        """
+        return observed_xg(
+            team,
+            w_sot=float(getattr(self.cfg, "xg_proxy_sot", DEFAULT_W_SOT)),
+            w_off=float(getattr(self.cfg, "xg_proxy_off", DEFAULT_W_OFF)),
+            w_big_chance=float(getattr(self.cfg, "xg_proxy_big_chance", DEFAULT_W_BIG_CHANCE)),
+        )
+
     # -- remaining-rate projection --------------------------------------- #
     def _remaining_rates(self, match: MatchSnapshot) -> tuple[float, float]:
         elapsed = min(max(match.minute, 0), 90)
@@ -81,11 +107,14 @@ class DixonColesInplayModel(ProbabilityModel):
         prior_h_pm = home_full / 90.0
         prior_a_pm = away_full / 90.0
 
-        if elapsed >= 1:
-            obs_h_pm = match.home.xg / elapsed
-            obs_a_pm = match.away.xg / elapsed
-        else:
-            obs_h_pm, obs_a_pm = prior_h_pm, prior_a_pm
+        # Observed scoring rate from live xG. When the provider supplies no xG (e.g.
+        # API-Football's in-play WC feed) we reconstruct it from shots; when even that
+        # is unavailable we fall back to the prior PER SIDE, so a missing signal never
+        # masquerades as "zero chances created" (which would over-rate the draw).
+        obs_h = self._observed_xg(match.home) if elapsed >= 1 else None
+        obs_a = self._observed_xg(match.away) if elapsed >= 1 else None
+        obs_h_pm = obs_h / elapsed if obs_h is not None else prior_h_pm
+        obs_a_pm = obs_a / elapsed if obs_a is not None else prior_a_pm
 
         # Live weight grows with minutes played, capped by config.
         w = self.cfg.live_xg_weight * (elapsed / 90.0)
@@ -175,3 +204,24 @@ class DixonColesInplayModel(ProbabilityModel):
                 "net_red_cards": match.net_red_cards,
             },
         ).normalized()
+
+    def scoreline_matrix(self, match: MatchSnapshot) -> np.ndarray:
+        """Joint final-score distribution ``M[i, j] = P(home_final=i, away_final=j)``.
+
+        The basis for every scoreline-derived market (total / spread / BTTS / correct-score
+        / team-total / margin — see modeling/derived.py). Uses the SAME remaining-goal
+        matrix ``predict`` collapses into 1X2, shifted by the current score.
+        """
+        hs, as_ = match.home_score, match.away_score
+        if match.period is MatchPeriod.FULL_TIME or match.status == "finished":
+            m = np.zeros((hs + 1, as_ + 1))
+            m[hs, as_] = 1.0  # degenerate on the actual result
+            return m
+        lam, mu = self._remaining_rates(match)
+        rem = remaining_goal_matrix(
+            lam, mu, rho=self._effective_rho(match), max_goals=self.cfg.max_goals
+        )
+        n = rem.shape[0]
+        m = np.zeros((n + hs, n + as_))
+        m[hs : hs + n, as_ : as_ + n] = rem  # shift remaining goals onto the current score
+        return m

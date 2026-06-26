@@ -160,11 +160,33 @@ async def _cmd_replay(args) -> int:
     from .models.db import Database
 
     cfg = _load(args)
+    if getattr(args, "bankroll", None) is not None:
+        cfg.risk.starting_bankroll = args.bankroll
     source = Database(args.db if args.db.startswith("sqlite") else f"sqlite:///{args.db}")
-    bt = Backtester(cfg, trade=not args.no_trade)
+    bt = Backtester(
+        cfg,
+        trade=not args.no_trade,
+        stake_mode=getattr(args, "stake_mode", "kelly"),
+    )
     res = await bt.run_replay(source, match_ids=[args.match_id] if args.match_id else None)
     print(res.report())
     await bt.aclose()
+    return 0
+
+
+async def _cmd_export(args) -> int:
+    from .backtest.export import export_bundles
+
+    cfg = _load(args)
+    if getattr(args, "bankroll", None) is not None:
+        cfg.risk.starting_bankroll = args.bankroll
+    ids = [args.match_id] if getattr(args, "match_id", None) else None
+    manifest = await export_bundles(cfg, args.db, args.out, match_ids=ids)
+    print(
+        f"exported {len(manifest['matches'])} bundles to {args.out} "
+        f"(aggregate: {manifest['aggregate']['n_fills']} fills, "
+        f"CLV preoff {manifest['aggregate']['avg_clv_preoff']})"
+    )
     return 0
 
 
@@ -392,10 +414,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="simulated market xG awareness 0..1 (0=blind strawman, 1=sharp); higher shrinks edge",
     )
 
-    rp = sub.add_parser("replay", help="replay a stored session DB")
+    rp = sub.add_parser("replay", help="replay a stored session DB (paper bets)")
     rp.add_argument("--db", required=True, help="path to a sqlite db from a prior run")
     rp.add_argument("--match-id", default=None)
     rp.add_argument("--no-trade", action="store_true")
+    rp.add_argument("--bankroll", type=float, default=None, help="starting fake bankroll $ (e.g. 100)")
+    rp.add_argument("--stake-mode", choices=["kelly", "fixed"], default="kelly")
+
+    ex = sub.add_parser("export-bundles", help="export DB → per-match JSON bundles for the web simulator")
+    ex.add_argument("--db", required=True, help="path to a recorder sqlite db")
+    ex.add_argument("--out", default="web/public/bundles", help="output dir for bundles + manifest")
+    ex.add_argument("--match-id", default=None, help="export a single match (e.g. for live)")
+    ex.add_argument("--bankroll", type=float, default=None, help="starting fake bankroll $ (default cfg)")
 
     h = sub.add_parser("historical", help="backtest against REAL xG + market data (JSON)")
     h.add_argument("--data", required=True, help="path to historical JSON/JSONL (see backtest/historical.py)")
@@ -442,6 +472,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_cmd_replay(args))
         if args.command == "historical":
             return asyncio.run(_cmd_historical(args))
+        if args.command == "export-bundles":
+            return asyncio.run(_cmd_export(args))
         if args.command == "fit":
             return asyncio.run(_cmd_fit(args))
         if args.command == "statsbomb":

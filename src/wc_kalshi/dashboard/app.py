@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..engine import trading
+from ..modeling.xg_proxy import observed_xg
 
 if TYPE_CHECKING:
     from ..engine.builders import Runtime
@@ -96,7 +97,8 @@ def _match_history(rt: "Runtime", match_id: str) -> dict[str, Any]:
             {
                 "minute": s.minute if s else None,
                 "score": f"{s.home_score}-{s.away_score}" if s else None,
-                "xg": [round(s.home.xg, 2), round(s.away.xg, 2)] if s else None,
+                "xg": [round(observed_xg(s.home) or 0.0, 2),
+                       round(observed_xg(s.away) or 0.0, 2)] if s else None,
                 "model": g["model"],
                 "market": g["market"],
             }
