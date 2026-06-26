@@ -9,7 +9,7 @@ import { Bets } from "../components/tabs/Bets";
 import { Games } from "../components/tabs/Games";
 import { About } from "../components/tabs/About";
 import { runMany } from "../lib/sim/engine";
-import { loadAllBundles, loadManifest, type Manifest } from "../lib/data";
+import { loadAllBundles, loadLive, loadManifest, type Manifest } from "../lib/data";
 import type { Bundle, Filters } from "../lib/sim/types";
 
 const NO_FILTERS: Filters = { sellOnly: false, disableBuys: false, maxEntryMinute: null };
@@ -26,6 +26,7 @@ export default function Page() {
   const [bankroll, setBankroll] = useState(100);
   const [kellyFraction, setKelly] = useState(0.25);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [liveBundle, setLiveBundle] = useState<Bundle | null>(null);
 
   // load data
   useEffect(() => {
@@ -50,13 +51,33 @@ export default function Page() {
   useEffect(() => { if (typeof location !== "undefined") history.replaceState(null, "", `#${tab}`); }, [tab]);
   useEffect(() => { if (mode === "basic" && tab === "sandbox") setTab("overview"); }, [mode, tab]);
 
+  // Near-live: poll the in-progress match from Vercel Blob (~1 min lag by design).
+  useEffect(() => {
+    let alive = true;
+    const tick = () => loadLive().then((b) => { if (alive) setLiveBundle(b); });
+    tick();
+    const h = setInterval(tick, 45000);
+    return () => { alive = false; clearInterval(h); };
+  }, []);
+
   const setMode = (m: Mode) => { setModeState(m); localStorage.setItem("wck-mode", m); };
   const adv = mode === "advanced";
 
-  const ids = manifest?.matches.map((x) => x.match_id) ?? [];
+  // Replay can show the live match (top of the list) plus all settled games.
+  const replayBundles = useMemo(
+    () => (liveBundle ? [liveBundle, ...bundles] : bundles),
+    [liveBundle, bundles]
+  );
+  const ids = replayBundles.map((b) => b.match_id);
   const posn = ids.indexOf(selectedId);
-  const selected = useMemo(() => bundles.find((b) => b.match_id === selectedId), [bundles, selectedId]);
-  const isLive = manifest?.live_match_id === selectedId && !!selectedId;
+  const selected = useMemo(() => replayBundles.find((b) => b.match_id === selectedId), [replayBundles, selectedId]);
+  const isLive = !!selected?.live;
+  // If the selected match vanished (e.g. a live game just settled), fall back to a settled one.
+  useEffect(() => {
+    if (selectedId && replayBundles.length && !replayBundles.some((b) => b.match_id === selectedId)) {
+      setSelectedId(bundles[bundles.length - 1]?.match_id ?? "");
+    }
+  }, [replayBundles, selectedId, bundles]);
   const totalBets = useMemo(() => (bundles.length ? runMany(bundles).nFills : undefined), [bundles]);
   const pick = (id: string, to: TabId = "replay") => { setSelectedId(id); setTab(to); };
 
@@ -64,7 +85,7 @@ export default function Page() {
 
   return (
     <div className="app">
-      <Sidebar active={tab} setActive={setTab} mode={mode} setMode={setMode} betCount={totalBets} />
+      <Sidebar active={tab} setActive={setTab} mode={mode} setMode={setMode} betCount={totalBets} liveActive={!!liveBundle} />
       <main className="main">
         {error && <div className="panel" style={{ color: "var(--red)" }}>Failed to load: {error}</div>}
         {!error && !ready && <div className="loading">Loading recorded games…</div>}
@@ -79,9 +100,9 @@ export default function Page() {
               <div className="gamenav" style={{ marginLeft: 0 }}>
                 <button className="nav" onClick={() => setSelectedId(ids[Math.max(0, posn - 1)])} disabled={posn <= 0}>‹</button>
                 <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-                  {manifest!.matches.map((mm) => (
-                    <option key={mm.match_id} value={mm.match_id}>
-                      {mm.home_team} {mm.final_score[0]}–{mm.final_score[1]} {mm.away_team}{manifest!.live_match_id === mm.match_id ? "  ● live" : ""}
+                  {replayBundles.map((b) => (
+                    <option key={b.match_id} value={b.match_id}>
+                      {b.live ? "● LIVE  " : ""}{b.home_team} {b.final_score[0]}–{b.final_score[1]} {b.away_team}
                     </option>
                   ))}
                 </select>

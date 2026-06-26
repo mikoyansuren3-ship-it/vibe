@@ -13,11 +13,11 @@ const NAV: { id: TabId; label: string; icon: string; advanced?: boolean }[] = [
 ];
 
 export function Sidebar({
-  active, setActive, mode, setMode, betCount,
+  active, setActive, mode, setMode, betCount, liveActive,
 }: {
   active: TabId; setActive: (t: TabId) => void;
   mode: Mode; setMode: (m: Mode) => void;
-  betCount?: number;
+  betCount?: number; liveActive?: boolean;
 }) {
   const items = NAV.filter((n) => !n.advanced || mode === "advanced");
   return (
@@ -34,6 +34,7 @@ export function Sidebar({
         <div key={n.id} className={`navitem ${active === n.id ? "active" : ""}`} onClick={() => setActive(n.id)}>
           <span className="ic">{n.icon}</span>
           <span>{n.label}</span>
+          {n.id === "replay" && liveActive && <span className="livedot" style={{ marginLeft: "auto" }} title="a match is live" />}
           {n.id === "bets" && betCount != null && <span className="badge2">{betCount}</span>}
         </div>
       ))}

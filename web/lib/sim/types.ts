@@ -51,7 +51,10 @@ export interface Bundle {
   away_team: string;
   home_elo: number | null;
   away_elo: number | null;
-  outcome: FinalOutcome;
+  outcome: FinalOutcome | null; // null while the match is still in progress (live)
+  live?: boolean;
+  status?: string;
+  minute?: number;
   final_score: [number, number];
   tickers: Partial<Record<OutcomeKey, string>>;
   preoff: Partial<Record<OutcomeKey, number>>;
