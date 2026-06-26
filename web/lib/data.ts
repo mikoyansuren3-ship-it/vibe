@@ -12,6 +12,7 @@ export interface ManifestEntry {
   final_score: [number, number];
   n_ticks: number;
   n_fills: number;
+  has_derived?: boolean;
   live?: boolean;
 }
 

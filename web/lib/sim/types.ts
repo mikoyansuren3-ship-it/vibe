@@ -62,6 +62,17 @@ export interface Bundle {
   ticks: Tick[];
   golden: { fills: GoldenFill[]; n_fills: number; pnl: number };
   config: SimConfig;
+  derived?: DerivedMarket[];
+}
+
+/** A scoreline-derived binary market (Total/BTTS/Spread/TeamTotal) — read-only,
+ *  model probability vs the Kalshi line over time, with settlement. */
+export interface DerivedMarket {
+  type: "total" | "btts" | "spread" | "team_total";
+  label: string;
+  strike: number | null;
+  ticks: [number, number, number][]; // [minute, modelProb, marketMid]
+  settled_yes: boolean;
 }
 
 /** Strategy knobs the sandbox exposes (the levers the game review surfaced). */

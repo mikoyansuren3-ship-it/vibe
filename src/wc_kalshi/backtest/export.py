@@ -20,10 +20,51 @@ from typing import Any
 from ..config import AppConfig
 from ..models.db import Database
 from ..models.schemas import MatchSnapshot
+from ..modeling.derived import (
+    prob_btts, prob_spread, prob_team_total_over, prob_total_over,
+)
 from ..modeling.inplay import DixonColesInplayModel
 from .replay import Backtester, _bucket_market_by_tick
 
 _OUTCOMES = ("home", "draw", "away")
+
+# Scoreline-derived market series we price + settle (read-only "Markets" view).
+_DERIVED_TYPES = {"KXWCTOTAL": "total", "KXWCBTTS": "btts", "KXWCSPREAD": "spread", "KXWCTEAMTOTAL": "team_total"}
+
+
+def _derived_side(sub: str | None, home: str, away: str) -> str | None:
+    if sub and home and home in sub:
+        return "home"
+    if sub and away and away in sub:
+        return "away"
+    return None
+
+
+def _derived_model_prob(series, M, strike, sub, home, away):
+    side = _derived_side(sub, home, away)
+    if series == "KXWCTOTAL" and strike is not None:
+        return prob_total_over(M, strike)
+    if series == "KXWCBTTS":
+        return prob_btts(M)
+    if series == "KXWCSPREAD" and strike is not None and side:
+        return prob_spread(M, side, strike)
+    if series == "KXWCTEAMTOTAL" and strike is not None and side:
+        return prob_team_total_over(M, side, strike)
+    return None
+
+
+def _derived_settles_yes(series, strike, sub, home, away, hs, as_):
+    side_is_home = bool(sub and home and home in sub)
+    side, opp = (hs, as_) if side_is_home else (as_, hs)
+    if series == "KXWCTOTAL":
+        return (hs + as_) > strike
+    if series == "KXWCBTTS":
+        return hs > 0 and as_ > 0
+    if series == "KXWCSPREAD":
+        return (side - opp) > strike
+    if series == "KXWCTEAMTOTAL":
+        return side > strike
+    return None
 
 
 def _final(match_snaps: list[MatchSnapshot]) -> tuple[str, int, int] | None:
@@ -147,6 +188,76 @@ def build_bundle(
     }
 
 
+def _build_derived(model, match_snaps, quote_rows, home, away, hs_final, as_final):
+    """Time series of (minute, model_prob, market_mid) for each scoreline-derived
+    contract, downsampled to ~1/2min, with settlement. Read-only (no betting)."""
+    import bisect
+
+    live = [s for s in match_snaps if s.period.is_live]
+    if not live or not quote_rows:
+        return []
+    ts_list = [s.ts.replace(tzinfo=None) for s in live]
+    mat_cache: dict[int, Any] = {}
+
+    def matrix_at(ts):
+        i = bisect.bisect_right(ts_list, ts) - 1
+        if i < 0:
+            return None, None
+        if i not in mat_cache:
+            mat_cache[i] = model.scoreline_matrix(live[i])
+        return mat_cache[i], live[i].minute
+
+    by_ticker: dict[str, list] = {}
+    meta: dict[str, tuple] = {}
+    for series, tk, ts, mid, strike, sub in quote_rows:
+        by_ticker.setdefault(tk, []).append((ts, mid))
+        meta[tk] = (series, strike, sub)
+
+    out = []
+    for tk, quotes in by_ticker.items():
+        series, strike, sub = meta[tk]
+        ticks, last_min = [], -99
+        for ts, mid in quotes:
+            M, minute = matrix_at(ts)
+            if M is None or minute - last_min < 2:  # downsample ~1/2min
+                continue
+            mp = _derived_model_prob(series, M, strike, sub, home, away)
+            if mp is None:
+                continue
+            ticks.append([minute, round(mp, 3), round(mid, 3)])
+            last_min = minute
+        if not ticks:
+            continue
+        out.append({
+            "type": _DERIVED_TYPES[series],
+            "label": sub or _DERIVED_TYPES[series],
+            "strike": strike,
+            "ticks": ticks,  # [minute, model_prob, market_mid]
+            "settled_yes": bool(_derived_settles_yes(series, strike, sub, home, away, hs_final, as_final)),
+        })
+    return out
+
+
+def _read_derived_quotes(db_path: str, match_id: str):
+    """Raw derived-market quotes for one match (ts parsed to naive datetime)."""
+    import sqlite3
+    from datetime import datetime
+    fp = db_path[len("sqlite:///"):] if db_path.startswith("sqlite:///") else db_path
+    con = sqlite3.connect(f"file:{fp}?mode=ro", uri=True)
+    rows = con.execute(
+        "SELECT series, market_ticker, ts, yes_bid, yes_ask, floor_strike, yes_sub_title "
+        "FROM raw_market_quotes WHERE match_id=? AND yes_bid IS NOT NULL AND yes_ask IS NOT NULL "
+        "ORDER BY ts", (match_id,)).fetchall()
+    con.close()
+    out = []
+    for series, tk, ts, yb, ya, strike, sub in rows:
+        if series not in _DERIVED_TYPES:
+            continue
+        out.append((series, tk, datetime.fromisoformat(ts).replace(tzinfo=None),
+                    (yb + ya) / 200.0, strike, sub))
+    return out
+
+
 async def export_bundles(
     cfg: AppConfig, db_path: str, out_dir: str, *, match_ids: list[str] | None = None
 ) -> dict[str, Any]:
@@ -180,6 +291,15 @@ async def export_bundles(
         )
         if bundle is None:
             continue
+        # Scoreline-derived markets (Total/BTTS/Spread/TeamTotal) — only the games whose
+        # raw_market_quotes were captured; read-only model-vs-market for the Markets view.
+        qrows = _read_derived_quotes(db_path, mid)
+        if qrows:
+            fs = bundle["final_score"]
+            bundle["derived"] = _build_derived(
+                DixonColesInplayModel(cfg.model), match_snaps, qrows,
+                bundle["home_team"], bundle["away_team"], fs[0], fs[1],
+            )
         (out / f"{mid}.json").write_text(json.dumps(bundle))
         manifest.append({
             "match_id": mid,
@@ -189,6 +309,7 @@ async def export_bundles(
             "final_score": bundle["final_score"],
             "n_ticks": bundle["n_ticks"],
             "n_fills": bundle["golden"]["n_fills"],
+            "has_derived": bool(bundle.get("derived")),
         })
 
     manifest_doc = {

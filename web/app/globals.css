@@ -234,6 +234,13 @@ input[type=range] { accent-color: var(--accent); }
 .gamecard .gscore { font-size: 22px; font-weight: 720; letter-spacing: -0.02em; margin: 8px 0 4px; }
 .gamecard .gmeta { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
 
+/* markets view */
+.mktrow { display: grid; grid-template-columns: 150px 1fr 190px; gap: 14px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.mktrow:last-child { border-bottom: none; }
+.mktlabel { font-size: 12.5px; color: var(--text); }
+.mktnums { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; text-align: right; align-items: flex-end; }
+@media (max-width: 640px) { .mktrow { grid-template-columns: 1fr; gap: 6px; } .mktnums { align-items: flex-start; text-align: left; } }
+
 /* about */
 .prose { max-width: 720px; line-height: 1.65; color: var(--text); font-size: 14px; }
 .prose h3 { font-size: 14px; margin: 22px 0 6px; color: var(--text); }
