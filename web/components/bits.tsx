@@ -3,21 +3,23 @@
 import type { OutcomeKey } from "../lib/sim/types";
 
 export const pct = (x: number | null | undefined) => (x == null ? "—" : `${(x * 100).toFixed(0)}%`);
-export const money = (x: number) => `${x < 0 ? "-" : ""}$${Math.abs(x).toFixed(2)}`;
-export const signed = (x: number, d = 4) => `${x >= 0 ? "+" : ""}${x.toFixed(d)}`;
+export const money = (x: number) => `${x < 0 ? "−" : ""}$${Math.abs(x).toFixed(2)}`;
+export const signed = (x: number, d = 4) => `${x >= 0 ? "+" : "−"}${Math.abs(x).toFixed(d)}`;
+export const cls = (x: number | null) => (x == null ? "flat" : x > 0 ? "pos" : x < 0 ? "neg" : "flat");
 
-const COLORS: Record<OutcomeKey, string> = { home: "var(--home)", draw: "var(--draw)", away: "var(--away)" };
+export const OUT_COLOR: Record<OutcomeKey, string> = { home: "var(--home)", draw: "var(--draw)", away: "var(--away)" };
 
-export function Stat({ label, value, cls }: { label: string; value: string; cls?: string }) {
+export function Tile({ k, v, c }: { k: string; v: string; c?: string }) {
   return (
-    <div className="stat">
-      <span className="label">{label}</span>
-      <span className={`val ${cls ?? ""}`}>{value}</span>
+    <div className="tile">
+      <div className="k">{k}</div>
+      <div className={`v ${c ?? ""}`}>{v}</div>
     </div>
   );
 }
 
-export function ProbBars({
+/** Stacked model (top) / market (bottom) probability bar + edge readout. */
+export function DualBars({
   labels,
   model,
   market,
@@ -28,46 +30,95 @@ export function ProbBars({
 }) {
   const keys: OutcomeKey[] = ["home", "draw", "away"];
   return (
-    <div>
-      <div className="probrow" style={{ color: "var(--muted)", fontSize: 11 }}>
-        <span />
-        <span>model</span>
-        <span>market (de-vig)</span>
-      </div>
-      {keys.map((k, i) => (
-        <div className="probrow" key={k}>
-          <span className="tag" style={{ color: COLORS[k] }}>{labels[i]}</span>
-          <div className="bar model">
-            <span style={{ width: `${model[i] * 100}%`, background: COLORS[k], opacity: 0.85 }} />
-            <span className="lbl">{pct(model[i])}</span>
+    <div className="probs">
+      <div className="probhead"><span /><span>model ▸ market</span><span style={{ textAlign: "right" }}>edge</span></div>
+      {keys.map((k, i) => {
+        const m = model[i];
+        const mk = market[i];
+        const edge = mk == null ? null : m - mk;
+        return (
+          <div className="probrow" key={k}>
+            <span className="tag" style={{ color: OUT_COLOR[k] }}>{labels[i]}</span>
+            <div className="dualbar">
+              <div className="model-fill" style={{ width: `${m * 100}%`, background: OUT_COLOR[k] }} />
+              <div className="market-fill" style={{ width: `${(mk ?? 0) * 100}%` }} />
+              <span className="rowlbl top">{pct(m)}</span>
+              <span className="rowlbl bot">{pct(mk)}</span>
+            </div>
+            <span className={`edge ${cls(edge)}`}>{edge == null ? "—" : signed(edge, 2)}</span>
           </div>
-          <div className="bar market">
-            <span style={{ width: `${(market[i] ?? 0) * 100}%` }} />
-            <span className="lbl">{pct(market[i])}</span>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-export function Sparkline({ points, baseline }: { points: number[]; baseline: number }) {
-  if (points.length < 2) return <svg className="spark" />;
-  const min = Math.min(baseline, ...points);
-  const max = Math.max(baseline, ...points);
+/** Equity curve with baseline, goal markers, and a "now" dot. */
+export function EquityChart({
+  points,
+  baseline,
+  goals,
+  now,
+  totalTicks,
+}: {
+  points: number[];
+  baseline: number;
+  goals: { minute: number; team: string }[];
+  now: number;
+  totalTicks: number;
+}) {
+  const W = 320;
+  const H = 130;
+  const padY = 10;
+  if (points.length < 2) return <svg className="chart" viewBox={`0 0 ${W} ${H}`} />;
+  const allY = [baseline, ...points];
+  const min = Math.min(...allY);
+  const max = Math.max(...allY);
   const range = max - min || 1;
-  const W = 100;
-  const H = 48;
-  const d = points
-    .map((p, i) => `${(i / (points.length - 1)) * W},${H - ((p - min) / range) * H}`)
-    .join(" ");
-  const baseY = H - ((baseline - min) / range) * H;
+  const x = (i: number) => (i / (totalTicks - 1)) * W;
+  const y = (v: number) => padY + (1 - (v - min) / range) * (H - 2 * padY);
+  const path = points.map((p, i) => `${x(i)},${y(p)}`).join(" ");
   const last = points[points.length - 1];
-  const color = last >= baseline ? "var(--green)" : "var(--red)";
+  const up = last >= baseline;
+  const baseY = y(baseline);
+  const area = `0,${baseY} ${path} ${x(points.length - 1)},${baseY}`;
   return (
-    <svg className="spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      <line x1="0" y1={baseY} x2={W} y2={baseY} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="2 2" />
-      <polyline points={d} fill="none" stroke={color} strokeWidth="1.2" vectorEffect="non-scaling-stroke" />
+    <svg className="chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={up ? "rgba(63,185,80,0.25)" : "rgba(248,81,73,0.22)"} />
+          <stop offset="100%" stopColor="rgba(0,0,0,0)" />
+        </linearGradient>
+      </defs>
+      <line x1="0" y1={baseY} x2={W} y2={baseY} stroke="var(--border2)" strokeWidth="1" strokeDasharray="3 3" />
+      <polygon points={area} fill="url(#eq)" />
+      <polyline points={path} fill="none" stroke={up ? "var(--green)" : "var(--red)"} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+      {goals.map((g, i) => {
+        const gx = (g.minute / 90) * W;
+        return <line key={i} x1={gx} y1="0" x2={gx} y2={H} stroke="var(--yellow)" strokeWidth="0.7" strokeDasharray="2 3" opacity="0.5" />;
+      })}
+      <circle cx={x(points.length - 1)} cy={y(last)} r="3" fill={up ? "var(--green)" : "var(--red)"} stroke="var(--bg)" strokeWidth="1.5" />
     </svg>
+  );
+}
+
+/** Signed horizontal CLV bar: red left of zero, green right. Domain ±0.30. */
+export function SignedBar({ value, max = 0.3 }: { value: number; max?: number }) {
+  const frac = Math.max(-1, Math.min(1, value / max));
+  const w = Math.abs(frac) * 50;
+  const pos = value >= 0;
+  return (
+    <div className="clvtrack">
+      <div className="zero" />
+      <div
+        className="seg"
+        style={{
+          left: pos ? "50%" : `${50 - w}%`,
+          width: `${w}%`,
+          background: pos ? "var(--green)" : "var(--red)",
+          opacity: 0.85,
+        }}
+      />
+    </div>
   );
 }
