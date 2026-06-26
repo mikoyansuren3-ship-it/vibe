@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from wc_kalshi.backtest.export import build_bundle
+from wc_kalshi.backtest.export import build_bundle, build_live_bundle
 from wc_kalshi.models.schemas import (
     MarketSnapshot,
     MatchContext,
@@ -72,3 +72,21 @@ def test_bundle_market_compaction_and_carry(cfg):
 def test_unsettled_match_returns_none(cfg):
     live_only = [_match(30, MatchPeriod.FIRST_HALF, 0, 0, ts=T0)]
     assert build_bundle(cfg, "m1", live_only, [], golden_fills=[], per_match_pnl=0.0, kelly_factor=1.0) is None
+
+
+def test_live_bundle_for_inprogress_match(cfg):
+    snaps = [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
+        _match(55, MatchPeriod.SECOND_HALF, 1, 0, ts=T0 + timedelta(minutes=55)),
+    ]
+    markets = [_mkt(Outcome.HOME, "H", 60, 62, ts=T0 + timedelta(seconds=1))]
+    b = build_live_bundle(cfg, "m1", snaps, markets)
+    assert b is not None
+    assert b["live"] is True and b["outcome"] is None
+    assert b["minute"] == 55 and b["final_score"] == [1, 0]  # current (not final) score
+    assert b["golden"]["n_fills"] == 0  # no settled fills for a live match
+
+
+def test_live_bundle_none_when_finished(cfg):
+    finished = [_match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished")]
+    assert build_live_bundle(cfg, "m1", finished, []) is None

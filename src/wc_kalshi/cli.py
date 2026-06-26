@@ -175,11 +175,20 @@ async def _cmd_replay(args) -> int:
 
 
 async def _cmd_export(args) -> int:
-    from .backtest.export import export_bundles
+    from .backtest.export import export_bundles, export_live
 
     cfg = _load(args)
     if getattr(args, "bankroll", None) is not None:
         cfg.risk.starting_bankroll = args.bankroll
+    if getattr(args, "live", False):
+        doc = export_live(cfg, args.db, args.out)
+        if doc.get("live"):
+            b = doc["bundle"]
+            print(f"live: {b['home_team']} {b['final_score'][0]}-{b['final_score'][1]} "
+                  f"{b['away_team']} ({b['minute']}') → {args.out}/live.json")
+        else:
+            print(f"no live match → wrote {args.out}/live.json (live:false)")
+        return 0
     ids = [args.match_id] if getattr(args, "match_id", None) else None
     manifest = await export_bundles(cfg, args.db, args.out, match_ids=ids)
     print(
@@ -426,6 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--out", default="web/public/bundles", help="output dir for bundles + manifest")
     ex.add_argument("--match-id", default=None, help="export a single match (e.g. for live)")
     ex.add_argument("--bankroll", type=float, default=None, help="starting fake bankroll $ (default cfg)")
+    ex.add_argument("--live", action="store_true", help="write live.json for the in-progress match only")
 
     h = sub.add_parser("historical", help="backtest against REAL xG + market data (JSON)")
     h.add_argument("--data", required=True, help="path to historical JSON/JSONL (see backtest/historical.py)")

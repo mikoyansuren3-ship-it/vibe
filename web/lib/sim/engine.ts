@@ -61,13 +61,16 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
     if (category !== "taken" && lastKeyByTicker[ticker] === key) return;
     lastKeyByTicker[ticker] = key;
     const ref = bundle.preoff[s.outcome];
+    const p = s.execPrice ?? 0;
+    const cost = s.action === "buy" ? p : 1 - p; // capital at risk per contract
     decisions.push({
       tickIndex: ti, minute, outcome: s.outcome, action: s.action as "buy" | "sell",
       modelP: s.modelP, marketImplied: s.implied, netEdge: s.netEdge,
-      execCents: Math.round((s.execPrice ?? 0) * 100),
+      execCents: Math.round(p * 100),
       category, contracts,
+      staked: category === "taken" ? contracts * cost : 0,
       clvPreoff: ref != null && s.execPrice != null && s.action != null ? signedClv(s.action, s.execPrice, ref) : null,
-      won: null,
+      won: null, pnl: null,
     });
   };
 
@@ -116,20 +119,36 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
     equityCurve.push({ minute: tick.minute, equity: bankroll + unrealized(open, lastMid) });
   }
 
-  // Settle every fill on the final 90' outcome.
+  // Settle on the final 90' outcome — unless the match is still live (outcome null),
+  // in which case bets stay open and P&L is the mark-to-market unrealized so far.
+  const settled = bundle.outcome === "H" || bundle.outcome === "D" || bundle.outcome === "A";
   let pnl = 0;
   let clvSum = 0;
   let clvN = 0;
   for (const f of fills) {
-    const p = f.entryCents / 100;
-    const won = outcomeWon(f.outcome, bundle.outcome) ? 1 : 0;
-    pnl += f.action === "buy" ? f.contracts * (won - p) : f.contracts * (p - won);
+    if (settled) {
+      const p = f.entryCents / 100;
+      const won = outcomeWon(f.outcome, bundle.outcome as string) ? 1 : 0;
+      pnl += f.action === "buy" ? f.contracts * (won - p) : f.contracts * (p - won);
+    }
     if (f.clvPreoff != null) {
       clvSum += f.clvPreoff;
       clvN += 1;
     }
   }
-  for (const d of decisions) if (d.category === "taken") d.won = outcomeWon(d.outcome, bundle.outcome);
+  if (settled) {
+    for (const d of decisions) {
+      if (d.category !== "taken") continue;
+      // A back (buy) wins if the outcome occurs; a fade (sell) wins if it does NOT.
+      const occurred = outcomeWon(d.outcome, bundle.outcome as string);
+      const betWon = d.action === "buy" ? occurred : !occurred;
+      d.won = betWon;
+      const p = d.execCents / 100;
+      d.pnl = betWon ? (d.action === "buy" ? d.contracts * (1 - p) : d.contracts * p) : -d.staked;
+    }
+  } else {
+    pnl = equityCurve.length ? equityCurve[equityCurve.length - 1].equity - bankroll : 0;
+  }
 
   return {
     fills,

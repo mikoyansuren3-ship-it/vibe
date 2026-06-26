@@ -51,7 +51,10 @@ export interface Bundle {
   away_team: string;
   home_elo: number | null;
   away_elo: number | null;
-  outcome: FinalOutcome;
+  outcome: FinalOutcome | null; // null while the match is still in progress (live)
+  live?: boolean;
+  status?: string;
+  minute?: number;
   final_score: [number, number];
   tickers: Partial<Record<OutcomeKey, string>>;
   preoff: Partial<Record<OutcomeKey, number>>;
@@ -100,8 +103,10 @@ export interface Decision {
   execCents: number;
   category: DecisionCategory;
   contracts: number; // >0 only when taken
+  staked: number; // dollars at risk (0 for considered-but-not-taken)
   clvPreoff: number | null;
   won: boolean | null; // settled result for taken bets
+  pnl: number | null; // settled profit/loss in dollars (taken bets only)
 }
 
 export interface SimResult {

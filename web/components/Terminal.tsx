@@ -56,6 +56,7 @@ export function Terminal({
   const clvF = fillsSoFar.filter((f) => f.clvPreoff != null);
   const clvNow = clvF.length ? clvF.reduce((s, f) => s + (f.clvPreoff as number), 0) / clvF.length : null;
   const atEnd = idx >= n - 1;
+  const settled = bundle.outcome != null;
   const playedFrac = (idx / (n - 1)) * 100;
 
   return (
@@ -99,9 +100,15 @@ export function Terminal({
         <EquityChart points={result.equityCurve.slice(0, idx + 1).map((e) => e.equity)} baseline={bankroll} goals={goals} now={idx} totalTicks={n} />
       </div>
 
-      {atEnd && (
+      {atEnd && !settled && (
         <div className="banner">
-          <span className={`pill ${bundle.outcome}`}>{FINAL_LABEL[bundle.outcome]}</span>
+          <span className="pill" style={{ background: "rgba(227,179,65,0.16)", color: "var(--yellow)" }}>● IN PROGRESS</span>
+          <span>Live through <b className="mono">{tick.minute}′</b> · {fillsSoFar.length} bets open · unrealized P&L <b className={cls(pnlNow)}>{money(pnlNow)}</b></span>
+        </div>
+      )}
+      {atEnd && settled && (
+        <div className="banner">
+          <span className={`pill ${bundle.outcome}`}>{FINAL_LABEL[bundle.outcome as string]}</span>
           <span>
             Settled <b className="mono">{bundle.final_score[0]}–{bundle.final_score[1]}</b> · {fillsSoFar.length} bets ·
             P&L <b className={cls(result.pnl)}>{money(result.pnl)}</b>
@@ -117,7 +124,9 @@ export function Terminal({
       <div className="fills">
         {fillsSoFar.length === 0 && <div className="note" style={{ marginTop: 0 }}>No bets yet — the bot is waiting for a worthwhile edge.</div>}
         {[...fillsSoFar].reverse().map((f, i) => {
-          const won = atEnd ? outcomeWon(f.outcome, bundle.outcome) : null;
+          // A back wins if the outcome occurs; a fade wins if it does NOT. (null while live.)
+          const occ = settled ? outcomeWon(f.outcome, bundle.outcome as string) : null;
+          const won = atEnd && occ != null ? (f.action === "buy" ? occ : !occ) : null;
           return (
             <div className="fill" style={{ gridTemplateColumns: adv ? "40px 46px 1fr 56px" : "40px 1fr auto" }} key={i}>
               <span className="mono" style={{ color: "var(--faint)" }}>{f.minute}′</span>

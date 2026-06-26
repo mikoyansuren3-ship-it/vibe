@@ -73,22 +73,12 @@ def _config_block(cfg: AppConfig, bankroll: float, kelly_factor: float) -> dict[
     }
 
 
-def build_bundle(
-    cfg: AppConfig,
-    match_id: str,
-    match_snaps: list[MatchSnapshot],
-    market_snaps: list,
-    golden_fills: list[dict],
-    per_match_pnl: float,
-    kelly_factor: float,
-) -> dict[str, Any] | None:
-    """Assemble one match's bundle. Returns None for unsettled matches."""
-    final = _final(match_snaps)
-    if final is None:
-        return None
-    res, hs_final, as_final = final
+def _build_ticks(
+    cfg: AppConfig, match_snaps: list[MatchSnapshot], market_snaps: list
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, float]]:
+    """Per-tick model probs + compact market quotes + pre-off mids (shared by
+    settled and live bundle builders)."""
     model = DixonColesInplayModel(cfg.model)
-
     ticks: list[dict[str, Any]] = []
     carry: dict[str, list] = {}
     tickers: dict[str, str] = {}
@@ -106,6 +96,24 @@ def build_bundle(
             "model": [round(p.p_home, 4), round(p.p_draw, 4), round(p.p_away, 4)],
             "markets": mk,
         })
+    return ticks, tickers, {oc: preoff[oc] for oc in _OUTCOMES if oc in preoff}
+
+
+def build_bundle(
+    cfg: AppConfig,
+    match_id: str,
+    match_snaps: list[MatchSnapshot],
+    market_snaps: list,
+    golden_fills: list[dict],
+    per_match_pnl: float,
+    kelly_factor: float,
+) -> dict[str, Any] | None:
+    """Assemble one match's bundle. Returns None for unsettled matches."""
+    final = _final(match_snaps)
+    if final is None:
+        return None
+    res, hs_final, as_final = final
+    ticks, tickers, preoff = _build_ticks(cfg, match_snaps, market_snaps)
 
     first = match_snaps[0]
     ctx = first.context
@@ -191,3 +199,62 @@ async def export_bundles(
     (out / "manifest.json").write_text(json.dumps(manifest_doc, indent=2))
     await bt.aclose()
     return manifest_doc
+
+
+def build_live_bundle(
+    cfg: AppConfig, match_id: str, match_snaps: list[MatchSnapshot], market_snaps: list
+) -> dict[str, Any] | None:
+    """Bundle for an IN-PROGRESS match — same shape as a settled bundle but with
+    ``outcome=None`` and ``live=True`` (the client engine leaves bets open). Returns
+    None if the match is already finished / not live."""
+    if not match_snaps or match_snaps[-1].period.is_finished:
+        return None
+    last = match_snaps[-1]
+    ticks, tickers, preoff = _build_ticks(cfg, match_snaps, market_snaps)
+    first = match_snaps[0]
+    ctx = first.context
+    return {
+        "match_id": match_id,
+        "home_team": first.home_team,
+        "away_team": first.away_team,
+        "home_elo": ctx.home_elo if ctx else None,
+        "away_elo": ctx.away_elo if ctx else None,
+        "outcome": None,
+        "live": True,
+        "status": last.status,
+        "minute": last.minute,
+        "final_score": [last.home_score, last.away_score],
+        "tickers": tickers,
+        "preoff": preoff,
+        "n_ticks": len(ticks),
+        "ticks": ticks,
+        "golden": {"fills": [], "n_fills": 0, "pnl": 0},
+        "config": _config_block(cfg, cfg.risk.starting_bankroll, 1.0),
+    }
+
+
+def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
+    """Write ``live.json`` for the currently in-progress match (or ``{live:false}``
+    if none). Read-only; no Backtester needed (the client engine bets client-side)."""
+    src = Database(db_path if db_path.startswith("sqlite") else f"sqlite:///{db_path}")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    live_bundle = None
+    for mid in src.match_ids():
+        snaps = src.iter_match_snapshots(mid)
+        if snaps and snaps[-1].period.is_live and not snaps[-1].period.is_finished:
+            b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid))
+            if b is not None:
+                # Prefer the most-recently-updated live match.
+                if live_bundle is None or snaps[-1].ts > live_bundle["_ts"]:
+                    b["_ts"] = snaps[-1].ts.isoformat()
+                    live_bundle = b
+
+    if live_bundle is not None:
+        live_bundle.pop("_ts", None)
+        doc = {"live": True, "bundle": live_bundle}
+    else:
+        doc = {"live": False}
+    (out / "live.json").write_text(json.dumps(doc))
+    return doc

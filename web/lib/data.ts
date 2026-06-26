@@ -38,3 +38,19 @@ export async function loadBundle(matchId: string, opts: { live?: boolean } = {})
 export async function loadAllBundles(ids: string[]): Promise<Bundle[]> {
   return Promise.all(ids.map((id) => loadBundle(id)));
 }
+
+// Public Vercel Blob store the recorder-host publisher writes the live match into.
+const BLOB_BASE =
+  process.env.NEXT_PUBLIC_BLOB_BASE || "https://tgk7qzxearwylitn.public.blob.vercel-storage.com";
+
+/** Poll the in-progress match (or null if no game is live). ~1-min lag by design. */
+export async function loadLive(): Promise<Bundle | null> {
+  try {
+    const r = await fetch(`${BLOB_BASE}/live.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const doc = await r.json();
+    return doc && doc.live && doc.bundle ? (doc.bundle as Bundle) : null;
+  } catch {
+    return null;
+  }
+}
