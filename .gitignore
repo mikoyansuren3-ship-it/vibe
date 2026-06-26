@@ -38,3 +38,4 @@ data/*.jsonl
 
 # OS
 .DS_Store
+.playwright-mcp/

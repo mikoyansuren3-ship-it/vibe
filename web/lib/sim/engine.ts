@@ -51,7 +51,8 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
   const fills: Fill[] = [];
   const equityCurve: { minute: number; equity: number }[] = [];
 
-  for (const tick of bundle.ticks) {
+  for (let ti = 0; ti < bundle.ticks.length; ti++) {
+    const tick = bundle.ticks[ti];
     for (const o of ["home", "draw", "away"] as OutcomeKey[]) {
       const q = tick.markets[o];
       if (q && q[0] != null && q[1] != null) lastMid[o] = (q[0] + q[1]) / 200;
@@ -77,6 +78,7 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
         const { cost } = kellyForTrade(sig.modelP, sig.execPrice, sig.action);
         const ref = bundle.preoff[sig.outcome];
         fills.push({
+          tickIndex: ti,
           minute: tick.minute,
           outcome: sig.outcome,
           action: sig.action,

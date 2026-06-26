@@ -75,6 +75,7 @@ export interface SimOptions {
 }
 
 export interface Fill {
+  tickIndex: number;
   minute: number;
   outcome: OutcomeKey;
   action: Action;
