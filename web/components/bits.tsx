@@ -23,21 +23,26 @@ export function DualBars({
   labels,
   model,
   market,
+  showEdge = true,
 }: {
   labels: [string, string, string];
   model: [number, number, number];
   market: [number | null, number | null, number | null];
+  showEdge?: boolean;
 }) {
   const keys: OutcomeKey[] = ["home", "draw", "away"];
+  const grid = showEdge ? "64px 1fr 60px" : "64px 1fr";
   return (
     <div className="probs">
-      <div className="probhead"><span /><span>model ▸ market</span><span style={{ textAlign: "right" }}>edge</span></div>
+      <div className="probhead" style={{ gridTemplateColumns: grid }}>
+        <span /><span>{showEdge ? "model ▸ market" : "the bot ▸ the market"}</span>{showEdge && <span style={{ textAlign: "right" }}>edge</span>}
+      </div>
       {keys.map((k, i) => {
         const m = model[i];
         const mk = market[i];
         const edge = mk == null ? null : m - mk;
         return (
-          <div className="probrow" key={k}>
+          <div className="probrow" key={k} style={{ gridTemplateColumns: grid }}>
             <span className="tag" style={{ color: OUT_COLOR[k] }}>{labels[i]}</span>
             <div className="dualbar">
               <div className="model-fill" style={{ width: `${m * 100}%`, background: OUT_COLOR[k] }} />
@@ -45,7 +50,7 @@ export function DualBars({
               <span className="rowlbl top">{pct(m)}</span>
               <span className="rowlbl bot">{pct(mk)}</span>
             </div>
-            <span className={`edge ${cls(edge)}`}>{edge == null ? "—" : signed(edge, 2)}</span>
+            {showEdge && <span className={`edge ${cls(edge)}`}>{edge == null ? "—" : signed(edge, 2)}</span>}
           </div>
         );
       })}
