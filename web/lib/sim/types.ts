@@ -85,8 +85,28 @@ export interface Fill {
   clvPreoff: number | null;
 }
 
+/** Why a considered bet did or didn't become a fill. */
+export type DecisionCategory = "taken" | "cooldown" | "too_small" | "filtered" | "passed_over";
+
+/** One betting decision the algo reached (taken or considered-but-skipped). */
+export interface Decision {
+  tickIndex: number;
+  minute: number;
+  outcome: OutcomeKey;
+  action: Action;
+  modelP: number;
+  marketImplied: number;
+  netEdge: number;
+  execCents: number;
+  category: DecisionCategory;
+  contracts: number; // >0 only when taken
+  clvPreoff: number | null;
+  won: boolean | null; // settled result for taken bets
+}
+
 export interface SimResult {
   fills: Fill[];
+  decisions: Decision[];
   pnl: number;
   bankrollEnd: number;
   clvPreoff: number | null;

@@ -5,7 +5,8 @@ import { runBundle } from "../lib/sim/engine";
 import { devigProportional } from "../lib/sim/policy";
 import type { Bundle, Filters, OutcomeKey } from "../lib/sim/types";
 import { FINAL_LABEL, goalMinutes, outcomeWon } from "../lib/sim/util";
-import { cls, DualBars, EquityChart, money, pct, signed, Tile } from "./bits";
+import { actionVerb, outcomeName } from "../lib/format";
+import { cls, DualBars, EquityChart, money, signed, Tile } from "./bits";
 
 const SPEEDS = [1, 4, 16, 64];
 
@@ -25,9 +26,9 @@ function marketImplied(tick: Bundle["ticks"][number]): [number | null, number | 
 }
 
 export function Terminal({
-  bundle, bankroll, kellyFraction, filters, live,
+  bundle, bankroll, kellyFraction, filters, live, adv = true,
 }: {
-  bundle: Bundle; bankroll: number; kellyFraction: number; filters: Filters; live?: boolean;
+  bundle: Bundle; bankroll: number; kellyFraction: number; filters: Filters; live?: boolean; adv?: boolean;
 }) {
   const result = useMemo(() => runBundle(bundle, { bankroll, kellyFraction, filters }), [bundle, bankroll, kellyFraction, filters]);
   const goals = useMemo(() => goalMinutes(bundle), [bundle]);
@@ -49,6 +50,7 @@ export function Terminal({
 
   const tick = bundle.ticks[Math.min(idx, n - 1)];
   const fillsSoFar = result.fills.filter((f) => f.tickIndex <= idx);
+  const consideredN = result.decisions.filter((d) => d.category !== "taken").length;
   const equity = result.equityCurve[Math.min(idx, result.equityCurve.length - 1)]?.equity ?? bankroll;
   const pnlNow = equity - bankroll;
   const clvF = fillsSoFar.filter((f) => f.clvPreoff != null);
@@ -66,7 +68,7 @@ export function Terminal({
         </div>
       </div>
 
-      <DualBars labels={[bundle.home_team.slice(0, 9), "Draw", bundle.away_team.slice(0, 9)]} model={tick.model} market={marketImplied(tick)} />
+      <DualBars labels={[bundle.home_team.slice(0, 9), "Draw", bundle.away_team.slice(0, 9)]} model={tick.model} market={marketImplied(tick)} showEdge={adv} />
 
       <div className="controls">
         <button className="primary" onClick={() => setPlaying((p) => !p)}>{playing ? "❚❚" : "▶"}</button>
@@ -86,11 +88,11 @@ export function Terminal({
         </select>
       </div>
 
-      <div className="tiles">
+      <div className="tiles" style={{ gridTemplateColumns: `repeat(${adv ? 4 : 3}, 1fr)` }}>
         <Tile k="Bankroll" v={money(bankroll)} />
         <Tile k={atEnd ? "Final equity" : "Equity"} v={money(equity)} c={cls(pnlNow)} />
         <Tile k="P&L" v={money(pnlNow)} c={cls(pnlNow)} />
-        <Tile k="Pre-off CLV" v={clvNow == null ? "—" : signed(clvNow, 3)} c={cls(clvNow)} />
+        {adv && <Tile k="Pre-off CLV" v={clvNow == null ? "—" : signed(clvNow, 3)} c={cls(clvNow)} />}
       </div>
 
       <div style={{ marginTop: 14 }}>
@@ -101,24 +103,31 @@ export function Terminal({
         <div className="banner">
           <span className={`pill ${bundle.outcome}`}>{FINAL_LABEL[bundle.outcome]}</span>
           <span>
-            Settled <b className="mono">{bundle.final_score[0]}–{bundle.final_score[1]}</b> · {fillsSoFar.length} fills ·
-            final P&L <b className={cls(result.pnl)}>{money(result.pnl)}</b> · CLV{" "}
-            <b className={cls(result.clvPreoff)}>{result.clvPreoff == null ? "—" : signed(result.clvPreoff, 3)}</b>
+            Settled <b className="mono">{bundle.final_score[0]}–{bundle.final_score[1]}</b> · {fillsSoFar.length} bets ·
+            P&L <b className={cls(result.pnl)}>{money(result.pnl)}</b>
+            {adv && <> · CLV <b className={cls(result.clvPreoff)}>{result.clvPreoff == null ? "—" : signed(result.clvPreoff, 3)}</b></>}
           </span>
         </div>
       )}
 
-      <div className="h2row" style={{ marginTop: 18 }}><h2>Fills ({fillsSoFar.length})</h2><span className="note" style={{ margin: 0 }}>newest first</span></div>
+      <div className="h2row" style={{ marginTop: 18 }}>
+        <h2>Bets taken ({fillsSoFar.length})</h2>
+        <span className="note" style={{ margin: 0 }}>{consideredN} considered → Bets tab</span>
+      </div>
       <div className="fills">
-        {fillsSoFar.length === 0 && <div className="note" style={{ marginTop: 0 }}>No bets yet — waiting for an actionable edge.</div>}
+        {fillsSoFar.length === 0 && <div className="note" style={{ marginTop: 0 }}>No bets yet — the bot is waiting for a worthwhile edge.</div>}
         {[...fillsSoFar].reverse().map((f, i) => {
           const won = atEnd ? outcomeWon(f.outcome, bundle.outcome) : null;
           return (
-            <div className="fill mono" key={i}>
-              <span style={{ color: "var(--faint)" }}>{f.minute}′</span>
-              <span className={f.action}>{f.action.toUpperCase()}</span>
-              <span>{f.outcome} ×{f.contracts} @ {f.entryCents}¢{won != null && <span className={won ? "pos" : "neg"}> · {won ? "won" : "lost"}</span>}</span>
-              <span className={cls(f.clvPreoff)} style={{ textAlign: "right" }}>{f.clvPreoff == null ? "" : signed(f.clvPreoff, 2)}</span>
+            <div className="fill" style={{ gridTemplateColumns: adv ? "40px 46px 1fr 56px" : "40px 1fr auto" }} key={i}>
+              <span className="mono" style={{ color: "var(--faint)" }}>{f.minute}′</span>
+              {adv && <span className={`mono ${f.action}`}>{f.action.toUpperCase()}</span>}
+              <span>
+                <span className={f.action}>{actionVerb(f.action)}</span> {outcomeName(bundle, f.outcome)}
+                {adv && <span className="mono" style={{ color: "var(--muted)" }}> ×{f.contracts} @{f.entryCents}¢</span>}
+                {won != null && <span className={won ? "pos" : "neg"}> · {won ? "WON" : "LOST"}</span>}
+              </span>
+              {adv && <span className={`mono ${cls(f.clvPreoff)}`} style={{ textAlign: "right" }}>{f.clvPreoff == null ? "" : signed(f.clvPreoff, 2)}</span>}
             </div>
           );
         })}

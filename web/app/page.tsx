@@ -1,50 +1,33 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Sandbox } from "../components/Sandbox";
+import { Sidebar, type Mode, type TabId } from "../components/Sidebar";
 import { Terminal } from "../components/Terminal";
-import { cls, money, signed } from "../components/bits";
+import { Sandbox } from "../components/Sandbox";
+import { Overview } from "../components/tabs/Overview";
+import { Bets } from "../components/tabs/Bets";
+import { Games } from "../components/tabs/Games";
+import { About } from "../components/tabs/About";
 import { runMany } from "../lib/sim/engine";
 import { loadAllBundles, loadManifest, type Manifest } from "../lib/data";
 import type { Bundle, Filters } from "../lib/sim/types";
 
 const NO_FILTERS: Filters = { sellOnly: false, disableBuys: false, maxEntryMinute: null };
-
-function Scoreboard({ m, bundles }: { m: Manifest; bundles: Bundle[] }) {
-  // Use the SAME client-side engine the sandbox/terminal use, so every number on
-  // the page is consistent. Brier comes from the Python calibration (sizing-independent).
-  const base = useMemo(() => runMany(bundles), [bundles]);
-  const brier = (m.aggregate as { calibration?: Record<string, number> }).calibration?.brier ?? 0;
-  const rec = m.matches.reduce((acc, x) => { acc[x.outcome]++; return acc; }, { H: 0, D: 0, A: 0 } as Record<string, number>);
-  const cells: { k: string; v: string; c?: string; sub?: string }[] = [
-    { k: "Games", v: String(m.matches.length), sub: `${base.nFills} paper fills` },
-    { k: "Paper P&L", v: money(base.pnl), c: cls(base.pnl), sub: `$100 / game, summed` },
-    { k: "Pre-off CLV", v: signed(base.clvPreoff ?? 0, 4), c: cls(base.clvPreoff ?? 0), sub: "vs opening line" },
-    { k: "Brier", v: brier.toFixed(4), sub: "uniform ≈ 0.667" },
-    { k: "Results", v: `${rec.H}–${rec.D}–${rec.A}`, sub: "home–draw–away" },
-  ];
-  return (
-    <div className="scoreboard">
-      {cells.map((c) => (
-        <div className="cell" key={c.k}>
-          <span className="k">{c.k}</span>
-          <span className={`v ${c.c ?? ""}`}>{c.v}</span>
-          {c.sub && <span className="sub2">{c.sub}</span>}
-        </div>
-      ))}
-    </div>
-  );
-}
+const TABS: TabId[] = ["overview", "replay", "bets", "sandbox", "games", "about"];
 
 export default function Page() {
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+
+  const [tab, setTab] = useState<TabId>("overview");
+  const [mode, setModeState] = useState<Mode>("basic");
   const [bankroll, setBankroll] = useState(100);
   const [kellyFraction, setKelly] = useState(0.25);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
 
+  // load data
   useEffect(() => {
     (async () => {
       try {
@@ -57,50 +40,72 @@ export default function Page() {
     })();
   }, []);
 
+  // restore mode + tab
+  useEffect(() => {
+    const sm = localStorage.getItem("wck-mode");
+    if (sm === "advanced" || sm === "basic") setModeState(sm);
+    const h = (typeof location !== "undefined" ? location.hash.replace("#", "") : "") as TabId;
+    if (TABS.includes(h)) setTab(h);
+  }, []);
+  useEffect(() => { if (typeof location !== "undefined") history.replaceState(null, "", `#${tab}`); }, [tab]);
+  useEffect(() => { if (mode === "basic" && tab === "sandbox") setTab("overview"); }, [mode, tab]);
+
+  const setMode = (m: Mode) => { setModeState(m); localStorage.setItem("wck-mode", m); };
+  const adv = mode === "advanced";
+
   const ids = manifest?.matches.map((x) => x.match_id) ?? [];
-  const pos = ids.indexOf(selectedId);
+  const posn = ids.indexOf(selectedId);
   const selected = useMemo(() => bundles.find((b) => b.match_id === selectedId), [bundles, selectedId]);
   const isLive = manifest?.live_match_id === selectedId && !!selectedId;
+  const totalBets = useMemo(() => (bundles.length ? runMany(bundles).nFills : undefined), [bundles]);
+  const pick = (id: string, to: TabId = "replay") => { setSelectedId(id); setTab(to); };
+
+  const ready = manifest && bundles.length > 0;
 
   return (
-    <div className="wrap">
-      <header className="top">
-        <div>
-          <div className="brandrow">
-            <span className="logo">K</span>
-            <h1>World Cup × Kalshi — Paper Gambling Simulator</h1>
-          </div>
-          <div className="sub">Watch the in-play model paper-bet real recorded matches, then tune the strategy and see the edge move — live, in your browser.</div>
-        </div>
-        {manifest && (
-          <div className="gamenav">
-            <button className="nav" onClick={() => setSelectedId(ids[Math.max(0, pos - 1)])} disabled={pos <= 0}>‹</button>
-            <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-              {manifest.matches.map((mm) => (
-                <option key={mm.match_id} value={mm.match_id}>
-                  {mm.home_team} {mm.final_score[0]}–{mm.final_score[1]} {mm.away_team}{manifest.live_match_id === mm.match_id ? "  ● live" : ""}
-                </option>
-              ))}
-            </select>
-            <button className="nav" onClick={() => setSelectedId(ids[Math.min(ids.length - 1, pos + 1)])} disabled={pos >= ids.length - 1}>›</button>
+    <div className="app">
+      <Sidebar active={tab} setActive={setTab} mode={mode} setMode={setMode} betCount={totalBets} />
+      <main className="main">
+        {error && <div className="panel" style={{ color: "var(--red)" }}>Failed to load: {error}</div>}
+        {!error && !ready && <div className="loading">Loading recorded games…</div>}
+
+        {ready && tab === "overview" && <Overview manifest={manifest!} bundles={bundles} adv={adv} onPick={pick} />}
+
+        {ready && tab === "replay" && selected && (
+          <div>
+            <div className="tabhead">
+              <h1>Replay</h1>
+              <div className="sub">Watch the bot paper-bet a game, minute by minute.</div>
+              <div className="gamenav" style={{ marginLeft: 0 }}>
+                <button className="nav" onClick={() => setSelectedId(ids[Math.max(0, posn - 1)])} disabled={posn <= 0}>‹</button>
+                <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+                  {manifest!.matches.map((mm) => (
+                    <option key={mm.match_id} value={mm.match_id}>
+                      {mm.home_team} {mm.final_score[0]}–{mm.final_score[1]} {mm.away_team}{manifest!.live_match_id === mm.match_id ? "  ● live" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button className="nav" onClick={() => setSelectedId(ids[Math.min(ids.length - 1, posn + 1)])} disabled={posn >= ids.length - 1}>›</button>
+              </div>
+            </div>
+            <Terminal bundle={selected} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} live={isLive} adv={adv} />
           </div>
         )}
-      </header>
 
-      {manifest && bundles.length > 0 && <Scoreboard m={manifest} bundles={bundles} />}
-      <div className="legend">
-        <b>Fake money, no edge — a lab, not a tipster.</b> Pre-off <b>CLV</b> (closing-line value) is the rigorous metric: did a bet enter better than the market&apos;s opening price? Positive beats the line; this model sits slightly negative — well-calibrated, but it doesn&apos;t beat Kalshi.
-      </div>
+        {ready && tab === "bets" && (
+          <Bets bundles={bundles} selectedId={selectedId} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} adv={adv} />
+        )}
 
-      {error && <div className="panel" style={{ color: "var(--red)" }}>Failed to load: {error}</div>}
-      {!error && !selected && <div className="loading">Loading recorded games…</div>}
+        {ready && tab === "sandbox" && adv && (
+          <div style={{ maxWidth: 600 }}>
+            <div className="tabhead"><h1>Sandbox</h1><div className="sub">Tune the strategy and watch the edge move across all {bundles.length} games.</div></div>
+            <Sandbox bundles={bundles} bankroll={bankroll} setBankroll={setBankroll} kellyFraction={kellyFraction} setKelly={setKelly} filters={filters} setFilters={setFilters} />
+          </div>
+        )}
 
-      {selected && (
-        <div className="grid">
-          <Terminal bundle={selected} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} live={isLive} />
-          <Sandbox bundles={bundles} bankroll={bankroll} setBankroll={setBankroll} kellyFraction={kellyFraction} setKelly={setKelly} filters={filters} setFilters={setFilters} />
-        </div>
-      )}
+        {ready && tab === "games" && <Games bundles={bundles} adv={adv} onPick={(id) => pick(id, "replay")} />}
+        {ready && tab === "about" && <About />}
+      </main>
     </div>
   );
 }

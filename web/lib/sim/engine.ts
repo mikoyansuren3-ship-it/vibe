@@ -10,8 +10,8 @@
 // CLV is policy-determined and size-independent, so it reproduces the Python
 // numbers exactly; P&L is this sim's own consistent isolated-bankroll model.
 
-import { evaluateTick, kellyForTrade, signedClv, sizeContracts } from "./policy";
-import type { Bundle, Fill, Filters, OutcomeKey, SimOptions, SimResult } from "./types";
+import { evaluateTick, type EdgeSig, kellyForTrade, signedClv, sizeContracts } from "./policy";
+import type { Bundle, Decision, DecisionCategory, Fill, Filters, OutcomeKey, SimOptions, SimResult } from "./types";
 import { NO_FILTERS } from "./types";
 
 function outcomeWon(o: OutcomeKey, finalOutcome: string): boolean {
@@ -49,7 +49,27 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
   const open: OpenPos[] = [];
   const lastMid: Partial<Record<OutcomeKey, number>> = {};
   const fills: Fill[] = [];
+  const decisions: Decision[] = [];
+  const lastKeyByTicker: Record<string, string> = {};
   const equityCurve: { minute: number; equity: number }[] = [];
+
+  // Record a decision, collapsing consecutive identical skips per market into one
+  // "opportunity" (a persistent 8-min cooldown = one entry, not ~80 ticks).
+  const record = (s: EdgeSig, category: DecisionCategory, contracts: number, ti: number, minute: number) => {
+    const ticker = bundle.tickers[s.outcome] ?? s.outcome;
+    const key = `${s.outcome}|${s.action}|${category}`;
+    if (category !== "taken" && lastKeyByTicker[ticker] === key) return;
+    lastKeyByTicker[ticker] = key;
+    const ref = bundle.preoff[s.outcome];
+    decisions.push({
+      tickIndex: ti, minute, outcome: s.outcome, action: s.action as "buy" | "sell",
+      modelP: s.modelP, marketImplied: s.implied, netEdge: s.netEdge,
+      execCents: Math.round((s.execPrice ?? 0) * 100),
+      category, contracts,
+      clvPreoff: ref != null && s.execPrice != null && s.action != null ? signedClv(s.action, s.execPrice, ref) : null,
+      won: null,
+    });
+  };
 
   for (let ti = 0; ti < bundle.ticks.length; ti++) {
     const tick = bundle.ticks[ti];
@@ -58,39 +78,39 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
       if (q && q[0] != null && q[1] != null) lastMid[o] = (q[0] + q[1]) / 200;
     }
 
-    const actionable = evaluateTick(tick, cfg).filter(
-      (s) => s.actionable && passesFilters(s.action as string, tick.minute, filters)
-    );
-    if (actionable.length > 0) {
-      // one trade per tick: the strongest net edge (match_loop.py:122)
-      const sig = actionable.reduce((a, b) => (Math.abs(b.netEdge) > Math.abs(a.netEdge) ? b : a));
+    const actionableAll = evaluateTick(tick, cfg).filter((s) => s.actionable);
+    const passed = actionableAll.filter((s) => passesFilters(s.action as string, tick.minute, filters));
+    for (const s of actionableAll) if (!passed.includes(s)) record(s, "filtered", 0, ti, tick.minute);
+
+    if (passed.length > 0) {
+      // one trade per tick: the strongest net edge (match_loop.py:122); the rest are "passed over".
+      const sig = passed.reduce((a, b) => (Math.abs(b.netEdge) > Math.abs(a.netEdge) ? b : a));
+      for (const s of passed) if (s !== sig) record(s, "passed_over", 0, ti, tick.minute);
+
       const ticker = bundle.tickers[sig.outcome] ?? sig.outcome;
-      // Per-market retrade cooldown (match_loop.py:171) — the dominant fill-count gate.
       const last = lastTradeMinute[ticker];
       const onCooldown = last != null && tick.minute - last < cfg.min_retrade_minutes;
       const existing = positionByTicker[ticker] ?? 0;
-      // Late-game size taper (match_loop._late_game_taper): shrink as we near full time.
       const taper = lateTaper(tick.minute, cfg.late_taper_minutes, cfg.late_taper_floor);
       const contracts = onCooldown
         ? 0
         : sizeContracts(sig, bankroll, { ...cfg, kelly_factor: cfg.kelly_factor * taper }, existing, matchExposure);
+
       if (contracts > 0 && sig.execPrice != null && sig.action != null) {
         const { cost } = kellyForTrade(sig.modelP, sig.execPrice, sig.action);
         const ref = bundle.preoff[sig.outcome];
         fills.push({
-          tickIndex: ti,
-          minute: tick.minute,
-          outcome: sig.outcome,
-          action: sig.action,
-          contracts,
-          entryCents: Math.round(sig.execPrice * 100),
-          cost,
+          tickIndex: ti, minute: tick.minute, outcome: sig.outcome, action: sig.action,
+          contracts, entryCents: Math.round(sig.execPrice * 100), cost,
           clvPreoff: ref != null ? signedClv(sig.action, sig.execPrice, ref) : null,
         });
         positionByTicker[ticker] = existing + contracts;
         lastTradeMinute[ticker] = tick.minute;
         matchExposure += contracts * cost;
         open.push({ outcome: sig.outcome, action: sig.action, contracts, entry: sig.execPrice });
+        record(sig, "taken", contracts, ti, tick.minute);
+      } else {
+        record(sig, onCooldown ? "cooldown" : "too_small", 0, ti, tick.minute);
       }
     }
     equityCurve.push({ minute: tick.minute, equity: bankroll + unrealized(open, lastMid) });
@@ -109,9 +129,11 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
       clvN += 1;
     }
   }
+  for (const d of decisions) if (d.category === "taken") d.won = outcomeWon(d.outcome, bundle.outcome);
 
   return {
     fills,
+    decisions,
     pnl,
     bankrollEnd: bankroll + pnl,
     clvPreoff: clvN ? clvSum / clvN : null,
