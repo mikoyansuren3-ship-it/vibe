@@ -125,7 +125,7 @@ export default function Page() {
         )}
 
         {ready && tab === "bets" && (
-          <Bets bundles={bundles} selectedId={selectedId} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} adv={adv} />
+          <Bets bundles={bundles} liveBundles={liveBundles} selectedId={selectedId} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} adv={adv} />
         )}
 
         {ready && tab === "sandbox" && adv && (

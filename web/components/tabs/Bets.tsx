@@ -5,6 +5,7 @@ import { runBundle } from "../../lib/sim/engine";
 import { actionVerb, CATEGORY, CONSIDERED_ORDER, outcomeName, OUT_HEX, wonLabel } from "../../lib/format";
 import type { Bundle, Decision, DecisionCategory, Filters } from "../../lib/sim/types";
 import { cls, money, signed } from "../bits";
+import { LiveBets } from "./LiveBets";
 
 const CAP = 60;
 const sMoney = (x: number) => (x >= 0 ? "+" : "−") + "$" + Math.abs(x).toFixed(2);
@@ -63,9 +64,9 @@ function Section({ cat, rows, adv, showGame }: { cat: DecisionCategory; rows: Ro
 }
 
 export function Bets({
-  bundles, selectedId, bankroll, kellyFraction, filters, adv,
+  bundles, liveBundles, selectedId, bankroll, kellyFraction, filters, adv,
 }: {
-  bundles: Bundle[]; selectedId: string;
+  bundles: Bundle[]; liveBundles: Bundle[]; selectedId: string;
   bankroll: number; kellyFraction: number; filters: Filters; adv: boolean;
 }) {
   const [scope, setScope] = useState<"all" | "game">("all");
@@ -103,6 +104,8 @@ export function Bets({
         <h1>Bets</h1>
         <div className="sub">Every bet the bot <b>took</b> (with stake &amp; return) — and every one it <b>considered</b> but skipped, grouped by why.</div>
       </div>
+
+      <LiveBets bundles={liveBundles} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} />
 
       <div className="betfilters">
         <span className={`chip ${scope === "all" ? "on" : ""}`} onClick={() => setScope("all")}>All games</span>

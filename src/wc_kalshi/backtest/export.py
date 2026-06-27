@@ -21,7 +21,7 @@ from ..config import AppConfig
 from ..models.db import Database
 from ..models.schemas import MatchSnapshot
 from ..modeling.derived import (
-    prob_btts, prob_spread, prob_team_total_over, prob_total_over,
+    prob_btts, prob_correct_score, prob_spread, prob_team_total_over, prob_total_over,
 )
 from ..modeling.inplay import DixonColesInplayModel
 from .replay import Backtester, _bucket_market_by_tick
@@ -30,6 +30,32 @@ _OUTCOMES = ("home", "draw", "away")
 
 # Scoreline-derived market series we price + settle (read-only "Markets" view).
 _DERIVED_TYPES = {"KXWCTOTAL": "total", "KXWCBTTS": "btts", "KXWCSPREAD": "spread", "KXWCTEAMTOTAL": "team_total"}
+
+# Human labels for EVERY captured Kalshi per-match series (the live "all markets" board).
+# A subset is priceable by the Dixon-Coles final-score matrix; the rest (half-markets,
+# corners, first-to-score) we show market-only — honestly flagged "no model price".
+_SERIES_LABEL = {
+    "KXWCGAME": "Match result (1X2)",
+    "KXWCTOTAL": "Total goals (O/U)",
+    "KXWCBTTS": "Both teams to score",
+    "KXWCSPREAD": "Spread / handicap",
+    "KXWCTEAMTOTAL": "Team total goals",
+    "KXWCSCORE": "Correct score",
+    "KXWCFTTS": "First team to score",
+    "KXWCCORNERS": "Team corners",
+    "KXWCTCORNERS": "Total corners",
+    "KXWC1H": "1st half result",
+    "KXWC2H": "2nd half result",
+    "KXWC1HTOTAL": "1st half total goals",
+    "KXWC2HTOTAL": "2nd half total goals",
+    "KXWC1HSCORE": "1st half correct score",
+    "KXWC1HSPREAD": "1st half spread",
+    "KXWC2HSPREAD": "2nd half spread",
+    "KXWC1HBTTS": "1st half BTTS",
+    "KXWC2HBTTS": "2nd half BTTS",
+}
+# Series the full-match scoreline matrix can price (everything else is market-only).
+_PRICEABLE_SERIES = {"KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE"}
 
 
 def _derived_side(sub: str | None, home: str, away: str) -> str | None:
@@ -322,19 +348,97 @@ async def export_bundles(
     return manifest_doc
 
 
+def _parse_correct_score(sub: str | None, home: str, away: str) -> tuple[int, int] | None:
+    """Parse a KXWCSCORE sub-title ("Egypt wins 1-0", "Draw 1-1", "IR Iran wins 2-1")
+    into (home_score, away_score). The first number is the WINNER's score."""
+    import re
+    if not sub:
+        return None
+    mo = re.search(r"(\d+)\s*-\s*(\d+)", sub)
+    if not mo:
+        return None
+    a, b = int(mo.group(1)), int(mo.group(2))
+    low = sub.lower()
+    if "draw" in low or "tie" in low or a == b:
+        return a, a
+    if home and home.lower() in low:      # home team named => home is the winner
+        return a, b
+    if away and away.lower() in low:      # away team named => away is the winner
+        return b, a
+    return None
+
+
+def _market_model_prob(series, sub, strike, M, home, away):
+    """Model probability for one captured contract, or None if not priceable."""
+    side = _derived_side(sub, home, away)
+    if series == "KXWCTOTAL" and strike is not None:
+        return prob_total_over(M, strike)
+    if series == "KXWCBTTS":
+        return prob_btts(M)
+    if series == "KXWCSPREAD" and strike is not None and side:
+        return prob_spread(M, side, strike)
+    if series == "KXWCTEAMTOTAL" and strike is not None and side:
+        return prob_team_total_over(M, side, strike)
+    if series == "KXWCSCORE":
+        sc = _parse_correct_score(sub, home, away)
+        if sc is not None:
+            return prob_correct_score(M, sc[0], sc[1])
+    return None
+
+
+def _live_market_board(model, last_snap, quote_rows, home, away):
+    """Exhaustive 'every possible bet' board for an in-progress match: the latest
+    quote for every captured contract across all series, with the model's price
+    where the final-score matrix can compute it (else market-only)."""
+    if not quote_rows:
+        return []
+    M = model.scoreline_matrix(last_snap) if last_snap.period.is_live else None
+
+    groups: dict[str, list] = {}
+    for series, ticker, sub, strike, bid, ask in quote_rows:
+        mid = round((bid + ask) / 200.0, 4) if bid is not None and ask is not None else None
+        model_prob = None
+        if M is not None and series in _PRICEABLE_SERIES:
+            mp = _market_model_prob(series, sub, strike, M, home, away)
+            model_prob = round(mp, 4) if mp is not None else None
+        groups.setdefault(series, []).append({
+            "label": sub or _SERIES_LABEL.get(series, series),
+            "strike": strike,
+            "bid": bid,
+            "ask": ask,
+            "mid": mid,
+            "model": model_prob,
+        })
+
+    out = []
+    for series in sorted(groups, key=lambda s: (s not in _PRICEABLE_SERIES, s)):
+        contracts = sorted(groups[series], key=lambda c: (c["strike"] is None, c["strike"] or 0, c["label"]))
+        out.append({
+            "series": series,
+            "label": _SERIES_LABEL.get(series, series),
+            "priceable": series in _PRICEABLE_SERIES,
+            "contracts": contracts,
+        })
+    return out
+
+
 def build_live_bundle(
-    cfg: AppConfig, match_id: str, match_snaps: list[MatchSnapshot], market_snaps: list
+    cfg: AppConfig, match_id: str, match_snaps: list[MatchSnapshot], market_snaps: list,
+    all_quote_rows: list | None = None,
 ) -> dict[str, Any] | None:
     """Bundle for an IN-PROGRESS match — same shape as a settled bundle but with
-    ``outcome=None`` and ``live=True`` (the client engine leaves bets open). Returns
-    None if the match is already finished / not live."""
+    ``outcome=None`` and ``live=True`` (the client engine leaves bets open). When
+    ``all_quote_rows`` is supplied, attach the exhaustive ``all_markets`` board (every
+    captured Kalshi contract + model price where computable). Returns None if the match
+    is already finished / not live."""
     if not match_snaps or match_snaps[-1].period.is_finished:
         return None
     last = match_snaps[-1]
+    model = DixonColesInplayModel(cfg.model)
     ticks, tickers, preoff = _build_ticks(cfg, match_snaps, market_snaps)
     first = match_snaps[0]
     ctx = first.context
-    return {
+    bundle = {
         "match_id": match_id,
         "home_team": first.home_team,
         "away_team": first.away_team,
@@ -352,6 +456,29 @@ def build_live_bundle(
         "golden": {"fills": [], "n_fills": 0, "pnl": 0},
         "config": _config_block(cfg, cfg.risk.starting_bankroll, 1.0),
     }
+    if all_quote_rows:
+        bundle["all_markets"] = _live_market_board(
+            model, last, all_quote_rows, first.home_team, first.away_team
+        )
+    return bundle
+
+
+def _read_all_quotes(db_path: str, match_id: str) -> list:
+    """Latest [bid, ask] for EVERY captured contract of a match (all series), for the
+    live 'all markets' board. Returns (series, ticker, sub, strike, bid, ask) rows."""
+    import sqlite3
+    fp = db_path[len("sqlite:///"):] if db_path.startswith("sqlite:///") else db_path
+    con = sqlite3.connect(f"file:{fp}?mode=ro", uri=True)
+    # Most-recent row per ticker (max ts), then its bid/ask.
+    rows = con.execute(
+        "SELECT q.series, q.market_ticker, q.yes_sub_title, q.floor_strike, q.yes_bid, q.yes_ask "
+        "FROM raw_market_quotes q "
+        "JOIN (SELECT market_ticker, MAX(ts) mts FROM raw_market_quotes "
+        "      WHERE match_id=? GROUP BY market_ticker) latest "
+        "  ON q.market_ticker=latest.market_ticker AND q.ts=latest.mts "
+        "WHERE q.match_id=?", (match_id, match_id)).fetchall()
+    con.close()
+    return rows
 
 
 def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
@@ -368,7 +495,8 @@ def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
     for mid in src.match_ids():
         snaps = src.iter_match_snapshots(mid)
         if snaps and snaps[-1].period.is_live and not snaps[-1].period.is_finished:
-            b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid))
+            quotes = _read_all_quotes(db_path, mid)
+            b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid), quotes)
             if b is not None:
                 live.append((snaps[-1].ts, b))
 
