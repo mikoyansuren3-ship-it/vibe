@@ -1,5 +1,6 @@
 """Bundle assembly for the web simulator (backtest/export.build_bundle)."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from wc_kalshi.backtest.export import build_bundle, build_live_bundle
@@ -90,3 +91,52 @@ def test_live_bundle_for_inprogress_match(cfg):
 def test_live_bundle_none_when_finished(cfg):
     finished = [_match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished")]
     assert build_live_bundle(cfg, "m1", finished, []) is None
+
+
+def _persist_match(db, mid, snaps, markets):
+    for s in snaps:
+        s.match_id = mid
+        db.add_match_snapshot(s)
+    for m in markets:
+        m.match_id = mid
+        db.add_market_snapshot(m)
+
+
+def test_export_live_emits_all_live_matches(cfg, tmp_path):
+    from wc_kalshi.backtest.export import export_live
+    from wc_kalshi.models.db import Database
+
+    db = Database(f"sqlite:///{tmp_path / 'rec.sqlite3'}")
+    # Two live matches (m_b updated more recently) + one finished (excluded).
+    _persist_match(db, "m_a", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
+        _match(30, MatchPeriod.FIRST_HALF, 1, 0, ts=T0 + timedelta(minutes=30)),
+    ], [_mkt(Outcome.HOME, "H", 60, 62, ts=T0 + timedelta(seconds=1))])
+    _persist_match(db, "m_b", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
+        _match(50, MatchPeriod.SECOND_HALF, 0, 1, ts=T0 + timedelta(minutes=50)),
+    ], [_mkt(Outcome.AWAY, "A", 55, 57, ts=T0 + timedelta(seconds=1))])
+    _persist_match(db, "m_done", [
+        _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
+    ], [])
+
+    doc = export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out"))
+    assert doc["live"] is True
+    ids = [b["match_id"] for b in doc["bundles"]]
+    assert ids == ["m_b", "m_a"]  # most-recently-updated first; finished excluded
+    assert doc["bundle"]["match_id"] == "m_b"  # back-compat singular = first
+    assert all(b["live"] is True and b["outcome"] is None for b in doc["bundles"])
+    written = json.loads((tmp_path / "out" / "live.json").read_text())
+    assert [b["match_id"] for b in written["bundles"]] == ["m_b", "m_a"]
+
+
+def test_export_live_no_live_match(cfg, tmp_path):
+    from wc_kalshi.backtest.export import export_live
+    from wc_kalshi.models.db import Database
+
+    db = Database(f"sqlite:///{tmp_path / 'rec.sqlite3'}")
+    _persist_match(db, "m_done", [
+        _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
+    ], [])
+    doc = export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out"))
+    assert doc == {"live": False, "bundles": []}

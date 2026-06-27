@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar, type Mode, type TabId } from "../components/Sidebar";
 import { Terminal } from "../components/Terminal";
 import { Sandbox } from "../components/Sandbox";
@@ -27,7 +27,7 @@ export default function Page() {
   const [bankroll, setBankroll] = useState(100);
   const [kellyFraction, setKelly] = useState(0.25);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
-  const [liveBundle, setLiveBundle] = useState<Bundle | null>(null);
+  const [liveBundles, setLiveBundles] = useState<Bundle[]>([]);
 
   // load data
   useEffect(() => {
@@ -52,22 +52,32 @@ export default function Page() {
   useEffect(() => { if (typeof location !== "undefined") history.replaceState(null, "", `#${tab}`); }, [tab]);
   useEffect(() => { if (mode === "basic" && tab === "sandbox") setTab("overview"); }, [mode, tab]);
 
-  // Near-live: poll the in-progress match from Vercel Blob (~1 min lag by design).
+  // Near-live: poll all in-progress matches from Vercel Blob (~1 min lag by design).
+  const didAutoLive = useRef(false);
   useEffect(() => {
     let alive = true;
-    const tick = () => loadLive().then((b) => { if (alive) setLiveBundle(b); });
+    const tick = () => loadLive().then((b) => { if (alive) setLiveBundles(b); });
     tick();
     const h = setInterval(tick, 45000);
     return () => { alive = false; clearInterval(h); };
   }, []);
 
+  // When live games first appear, surface the most-recent one by default (once,
+  // so we never yank the selection after the user starts navigating).
+  useEffect(() => {
+    if (!didAutoLive.current && liveBundles.length > 0) {
+      didAutoLive.current = true;
+      setSelectedId(liveBundles[0].match_id);
+    }
+  }, [liveBundles]);
+
   const setMode = (m: Mode) => { setModeState(m); localStorage.setItem("wck-mode", m); };
   const adv = mode === "advanced";
 
-  // Replay can show the live match (top of the list) plus all settled games.
+  // Replay can show the live matches (top of the list) plus all settled games.
   const replayBundles = useMemo(
-    () => (liveBundle ? [liveBundle, ...bundles] : bundles),
-    [liveBundle, bundles]
+    () => [...liveBundles, ...bundles],
+    [liveBundles, bundles]
   );
   const ids = replayBundles.map((b) => b.match_id);
   const posn = ids.indexOf(selectedId);
@@ -86,7 +96,7 @@ export default function Page() {
 
   return (
     <div className="app">
-      <Sidebar active={tab} setActive={setTab} mode={mode} setMode={setMode} betCount={totalBets} liveActive={!!liveBundle} />
+      <Sidebar active={tab} setActive={setTab} mode={mode} setMode={setMode} betCount={totalBets} liveActive={liveBundles.length > 0} />
       <main className="main">
         {error && <div className="panel" style={{ color: "var(--red)" }}>Failed to load: {error}</div>}
         {!error && !ready && <div className="loading">Loading recorded games…</div>}

@@ -355,27 +355,30 @@ def build_live_bundle(
 
 
 def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
-    """Write ``live.json`` for the currently in-progress match (or ``{live:false}``
-    if none). Read-only; no Backtester needed (the client engine bets client-side)."""
+    """Write ``live.json`` for EVERY currently in-progress match (or ``{live:false}``
+    if none). Read-only; no Backtester needed (the client engine bets client-side).
+
+    The doc carries ``bundles`` (all live games, most-recently-updated first) plus
+    ``bundle`` (the first of those) for backward compatibility with older clients."""
     src = Database(db_path if db_path.startswith("sqlite") else f"sqlite:///{db_path}")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    live_bundle = None
+    live: list[tuple[Any, dict[str, Any]]] = []
     for mid in src.match_ids():
         snaps = src.iter_match_snapshots(mid)
         if snaps and snaps[-1].period.is_live and not snaps[-1].period.is_finished:
             b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid))
             if b is not None:
-                # Prefer the most-recently-updated live match.
-                if live_bundle is None or snaps[-1].ts > live_bundle["_ts"]:
-                    b["_ts"] = snaps[-1].ts.isoformat()
-                    live_bundle = b
+                live.append((snaps[-1].ts, b))
 
-    if live_bundle is not None:
-        live_bundle.pop("_ts", None)
-        doc = {"live": True, "bundle": live_bundle}
+    # Most-recently-updated match first (its bundle is the back-compat ``bundle``).
+    live.sort(key=lambda x: x[0], reverse=True)
+    bundles = [b for _, b in live]
+
+    if bundles:
+        doc: dict[str, Any] = {"live": True, "bundles": bundles, "bundle": bundles[0]}
     else:
-        doc = {"live": False}
+        doc = {"live": False, "bundles": []}
     (out / "live.json").write_text(json.dumps(doc))
     return doc
