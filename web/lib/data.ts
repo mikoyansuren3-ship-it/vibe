@@ -12,6 +12,7 @@ export interface ManifestEntry {
   final_score: [number, number];
   n_ticks: number;
   n_fills: number;
+  has_derived?: boolean;
   live?: boolean;
 }
 
@@ -43,14 +44,18 @@ export async function loadAllBundles(ids: string[]): Promise<Bundle[]> {
 const BLOB_BASE =
   process.env.NEXT_PUBLIC_BLOB_BASE || "https://tgk7qzxearwylitn.public.blob.vercel-storage.com";
 
-/** Poll the in-progress match (or null if no game is live). ~1-min lag by design. */
-export async function loadLive(): Promise<Bundle | null> {
+/** Poll all in-progress matches (empty if none live). ~1-min lag by design.
+ * Reads the multi-game `bundles` array, falling back to the legacy single
+ * `bundle` field for older live.json payloads. */
+export async function loadLive(): Promise<Bundle[]> {
   try {
     const r = await fetch(`${BLOB_BASE}/live.json?t=${Date.now()}`, { cache: "no-store" });
-    if (!r.ok) return null;
+    if (!r.ok) return [];
     const doc = await r.json();
-    return doc && doc.live && doc.bundle ? (doc.bundle as Bundle) : null;
+    if (!doc || !doc.live) return [];
+    if (Array.isArray(doc.bundles)) return doc.bundles as Bundle[];
+    return doc.bundle ? [doc.bundle as Bundle] : [];
   } catch {
-    return null;
+    return [];
   }
 }

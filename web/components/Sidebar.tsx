@@ -1,12 +1,13 @@
 "use client";
 
-export type TabId = "overview" | "replay" | "bets" | "sandbox" | "games" | "about";
+export type TabId = "overview" | "replay" | "bets" | "markets" | "sandbox" | "games" | "about";
 export type Mode = "basic" | "advanced";
 
 const NAV: { id: TabId; label: string; icon: string; advanced?: boolean }[] = [
   { id: "overview", label: "Overview", icon: "◉" },
   { id: "replay", label: "Replay", icon: "▶" },
   { id: "bets", label: "Bets", icon: "▦" },
+  { id: "markets", label: "Markets", icon: "⊞" },
   { id: "sandbox", label: "Sandbox", icon: "⚙", advanced: true },
   { id: "games", label: "Games", icon: "▤" },
   { id: "about", label: "About", icon: "ⓘ" },

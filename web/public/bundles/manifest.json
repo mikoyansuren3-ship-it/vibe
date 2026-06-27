@@ -10,7 +10,8 @@
         4
       ],
       "n_ticks": 215,
-      "n_fills": 0
+      "n_fills": 0,
+      "has_derived": false
     },
     {
       "match_id": "1489395",
@@ -22,7 +23,8 @@
         0
       ],
       "n_ticks": 651,
-      "n_fills": 15
+      "n_fills": 15,
+      "has_derived": false
     },
     {
       "match_id": "1489396",
@@ -34,7 +36,8 @@
         3
       ],
       "n_ticks": 541,
-      "n_fills": 13
+      "n_fills": 13,
+      "has_derived": false
     },
     {
       "match_id": "1489397",
@@ -46,7 +49,8 @@
         0
       ],
       "n_ticks": 439,
-      "n_fills": 3
+      "n_fills": 3,
+      "has_derived": false
     },
     {
       "match_id": "1489398",
@@ -58,7 +62,8 @@
         2
       ],
       "n_ticks": 693,
-      "n_fills": 12
+      "n_fills": 12,
+      "has_derived": false
     },
     {
       "match_id": "1489399",
@@ -70,7 +75,8 @@
         0
       ],
       "n_ticks": 605,
-      "n_fills": 14
+      "n_fills": 14,
+      "has_derived": false
     },
     {
       "match_id": "1489400",
@@ -82,7 +88,8 @@
         2
       ],
       "n_ticks": 667,
-      "n_fills": 10
+      "n_fills": 10,
+      "has_derived": false
     },
     {
       "match_id": "1489401",
@@ -94,7 +101,8 @@
         2
       ],
       "n_ticks": 404,
-      "n_fills": 8
+      "n_fills": 8,
+      "has_derived": false
     },
     {
       "match_id": "1489402",
@@ -106,7 +114,8 @@
         0
       ],
       "n_ticks": 395,
-      "n_fills": 11
+      "n_fills": 11,
+      "has_derived": false
     },
     {
       "match_id": "1489403",
@@ -118,7 +127,8 @@
         1
       ],
       "n_ticks": 604,
-      "n_fills": 8
+      "n_fills": 8,
+      "has_derived": false
     },
     {
       "match_id": "1489404",
@@ -130,7 +140,8 @@
         0
       ],
       "n_ticks": 13,
-      "n_fills": 1
+      "n_fills": 1,
+      "has_derived": false
     },
     {
       "match_id": "1489407",
@@ -142,7 +153,8 @@
         0
       ],
       "n_ticks": 12,
-      "n_fills": 5
+      "n_fills": 5,
+      "has_derived": false
     },
     {
       "match_id": "1489408",
@@ -154,7 +166,8 @@
         1
       ],
       "n_ticks": 275,
-      "n_fills": 7
+      "n_fills": 7,
+      "has_derived": false
     },
     {
       "match_id": "1489409",
@@ -166,7 +179,8 @@
         2
       ],
       "n_ticks": 513,
-      "n_fills": 2
+      "n_fills": 2,
+      "has_derived": true
     },
     {
       "match_id": "1489410",
@@ -178,7 +192,8 @@
         1
       ],
       "n_ticks": 524,
-      "n_fills": 16
+      "n_fills": 16,
+      "has_derived": true
     },
     {
       "match_id": "1489411",
@@ -190,7 +205,8 @@
         0
       ],
       "n_ticks": 478,
-      "n_fills": 6
+      "n_fills": 6,
+      "has_derived": true
     },
     {
       "match_id": "1489412",
@@ -202,7 +218,21 @@
         3
       ],
       "n_ticks": 449,
-      "n_fills": 2
+      "n_fills": 2,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489416",
+      "home_team": "Norway",
+      "away_team": "France",
+      "outcome": "A",
+      "final_score": [
+        1,
+        4
+      ],
+      "n_ticks": 332,
+      "n_fills": 4,
+      "has_derived": true
     },
     {
       "match_id": "1539008",
@@ -214,7 +244,8 @@
         0
       ],
       "n_ticks": 629,
-      "n_fills": 9
+      "n_fills": 10,
+      "has_derived": false
     },
     {
       "match_id": "1539009",
@@ -226,7 +257,8 @@
         1
       ],
       "n_ticks": 284,
-      "n_fills": 7
+      "n_fills": 7,
+      "has_derived": false
     },
     {
       "match_id": "1539010",
@@ -238,7 +270,8 @@
         3
       ],
       "n_ticks": 12,
-      "n_fills": 3
+      "n_fills": 3,
+      "has_derived": false
     },
     {
       "match_id": "1539011",
@@ -250,7 +283,8 @@
         1
       ],
       "n_ticks": 480,
-      "n_fills": 11
+      "n_fills": 11,
+      "has_derived": true
     },
     {
       "match_id": "1539012",
@@ -262,7 +296,8 @@
         2
       ],
       "n_ticks": 514,
-      "n_fills": 13
+      "n_fills": 14,
+      "has_derived": true
     },
     {
       "match_id": "1539017",
@@ -274,36 +309,50 @@
         0
       ],
       "n_ticks": 315,
-      "n_fills": 3
+      "n_fills": 3,
+      "has_derived": false
+    },
+    {
+      "match_id": "1539074",
+      "home_team": "Senegal",
+      "away_team": "Iraq",
+      "outcome": "H",
+      "final_score": [
+        5,
+        0
+      ],
+      "n_ticks": 344,
+      "n_fills": 2,
+      "has_derived": true
     }
   ],
   "aggregate": {
-    "n_matches": 23,
-    "n_fills": 179,
+    "n_matches": 25,
+    "n_fills": 187,
     "stake_mode": "kelly",
-    "realized_pnl": 74.45,
+    "realized_pnl": 37.6,
     "fees_paid": 0.0,
-    "gross_pnl": 74.45,
-    "roi": 0.7445,
-    "t_stat": 0.37,
+    "gross_pnl": 37.6,
+    "roi": 0.376,
+    "t_stat": 0.19,
     "pnl_ci": [
-      -13.692,
-      19.685
+      -14.021,
+      17.479
     ],
-    "avg_clv": 0.085,
-    "clv_n": 179,
-    "avg_clv_preoff": -0.0934,
-    "clv_n_preoff": 179,
-    "avg_clv_5m": 0.0051,
-    "clv_n_5m": 163,
+    "avg_clv": 0.0766,
+    "clv_n": 187,
+    "avg_clv_preoff": -0.0879,
+    "clv_n_preoff": 187,
+    "avg_clv_5m": 0.0037,
+    "clv_n_5m": 171,
     "starting_bankroll": 100.0,
-    "ending_equity": 174.45,
+    "ending_equity": 137.6,
     "calibration": {
-      "n": 317.0,
-      "brier": 0.4404,
-      "log_loss": 0.8243,
-      "ece": 0.0308,
-      "calibration_factor": 0.8462
+      "n": 337.0,
+      "brier": 0.4228,
+      "log_loss": 0.7928,
+      "ece": 0.0289,
+      "calibration_factor": 0.8555
     }
   },
   "config": {
@@ -322,6 +371,6 @@
     "late_taper_minutes": 15,
     "late_taper_floor": 0.34,
     "bankroll": 100.0,
-    "kelly_factor": 0.8462
+    "kelly_factor": 0.8555
   }
 }
