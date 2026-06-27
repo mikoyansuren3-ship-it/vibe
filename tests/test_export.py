@@ -130,6 +130,35 @@ def test_export_live_emits_all_live_matches(cfg, tmp_path):
     assert [b["match_id"] for b in written["bundles"]] == ["m_b", "m_a"]
 
 
+def test_live_bundle_all_markets_board(cfg):
+    snaps = [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
+        _match(40, MatchPeriod.FIRST_HALF, 0, 0, ts=T0 + timedelta(minutes=40)),
+    ]
+    # (series, ticker, sub, strike, bid, ask) — a priceable + a market-only series.
+    quotes = [
+        ("KXWCTOTAL", "KX-T-25", "Over 2.5 goals scored", 2.5, 40, 42),
+        ("KXWCBTTS", "KX-BTTS", "Both Teams To Score", None, 48, 50),
+        ("KXWCCORNERS", "KX-C-8", "8+ corners", 8.0, 50, 52),  # no model price
+    ]
+    b = build_live_bundle(cfg, "m1", snaps, [], quotes)
+    assert b is not None and "all_markets" in b
+    by_series = {g["series"]: g for g in b["all_markets"]}
+    assert by_series["KXWCTOTAL"]["priceable"] is True
+    assert by_series["KXWCTOTAL"]["contracts"][0]["model"] is not None  # priced
+    assert by_series["KXWCCORNERS"]["priceable"] is False
+    assert by_series["KXWCCORNERS"]["contracts"][0]["model"] is None  # market-only
+    assert by_series["KXWCCORNERS"]["contracts"][0]["mid"] == 0.51  # (50+52)/200
+
+
+def test_parse_correct_score():
+    from wc_kalshi.backtest.export import _parse_correct_score
+    assert _parse_correct_score("Egypt wins 1-0", "Egypt", "Iran") == (1, 0)
+    assert _parse_correct_score("IR Iran wins 2-1", "Egypt", "Iran") == (1, 2)
+    assert _parse_correct_score("Draw 1-1", "Egypt", "Iran") == (1, 1)
+    assert _parse_correct_score("nonsense", "Egypt", "Iran") is None
+
+
 def test_export_live_no_live_match(cfg, tmp_path):
     from wc_kalshi.backtest.export import export_live
     from wc_kalshi.models.db import Database

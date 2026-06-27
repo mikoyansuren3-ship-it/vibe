@@ -63,6 +63,25 @@ export interface Bundle {
   golden: { fills: GoldenFill[]; n_fills: number; pnl: number };
   config: SimConfig;
   derived?: DerivedMarket[];
+  all_markets?: LiveMarketGroup[]; // live games only: every captured Kalshi contract
+}
+
+/** One Kalshi contract on a live game (latest quote + model price where computable). */
+export interface LiveContract {
+  label: string;
+  strike: number | null;
+  bid: number | null;
+  ask: number | null;
+  mid: number | null;
+  model: number | null; // null => the model can't price this series (half-markets, corners…)
+}
+
+/** A captured Kalshi series for a live game, with all its contracts. */
+export interface LiveMarketGroup {
+  series: string;
+  label: string;
+  priceable: boolean;
+  contracts: LiveContract[];
 }
 
 /** A scoreline-derived binary market (Total/BTTS/Spread/TeamTotal) — read-only,
