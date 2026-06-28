@@ -222,6 +222,45 @@
       "has_derived": true
     },
     {
+      "match_id": "1489413",
+      "home_team": "Cape Verde Islands",
+      "away_team": "Saudi Arabia",
+      "outcome": "D",
+      "final_score": [
+        0,
+        0
+      ],
+      "n_ticks": 245,
+      "n_fills": 6,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489414",
+      "home_team": "Egypt",
+      "away_team": "Iran",
+      "outcome": "D",
+      "final_score": [
+        1,
+        1
+      ],
+      "n_ticks": 465,
+      "n_fills": 17,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489415",
+      "home_team": "New Zealand",
+      "away_team": "Belgium",
+      "outcome": "A",
+      "final_score": [
+        1,
+        5
+      ],
+      "n_ticks": 462,
+      "n_fills": 4,
+      "has_derived": true
+    },
+    {
       "match_id": "1489416",
       "home_team": "Norway",
       "away_team": "France",
@@ -231,7 +270,85 @@
         4
       ],
       "n_ticks": 332,
-      "n_fills": 4,
+      "n_fills": 5,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489417",
+      "home_team": "Uruguay",
+      "away_team": "Spain",
+      "outcome": "A",
+      "final_score": [
+        0,
+        1
+      ],
+      "n_ticks": 258,
+      "n_fills": 5,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489418",
+      "home_team": "Algeria",
+      "away_team": "Austria",
+      "outcome": "D",
+      "final_score": [
+        3,
+        3
+      ],
+      "n_ticks": 468,
+      "n_fills": 17,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489419",
+      "home_team": "Colombia",
+      "away_team": "Portugal",
+      "outcome": "D",
+      "final_score": [
+        0,
+        0
+      ],
+      "n_ticks": 459,
+      "n_fills": 15,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489420",
+      "home_team": "Croatia",
+      "away_team": "Ghana",
+      "outcome": "H",
+      "final_score": [
+        2,
+        1
+      ],
+      "n_ticks": 480,
+      "n_fills": 12,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489421",
+      "home_team": "Jordan",
+      "away_team": "Argentina",
+      "outcome": "A",
+      "final_score": [
+        1,
+        3
+      ],
+      "n_ticks": 452,
+      "n_fills": 2,
+      "has_derived": true
+    },
+    {
+      "match_id": "1489422",
+      "home_team": "Panama",
+      "away_team": "England",
+      "outcome": "A",
+      "final_score": [
+        0,
+        2
+      ],
+      "n_ticks": 446,
+      "n_fills": 2,
       "has_derived": true
     },
     {
@@ -244,7 +361,7 @@
         0
       ],
       "n_ticks": 629,
-      "n_fills": 10,
+      "n_fills": 7,
       "has_derived": false
     },
     {
@@ -257,7 +374,7 @@
         1
       ],
       "n_ticks": 284,
-      "n_fills": 7,
+      "n_fills": 6,
       "has_derived": false
     },
     {
@@ -296,7 +413,20 @@
         2
       ],
       "n_ticks": 514,
-      "n_fills": 14,
+      "n_fills": 9,
+      "has_derived": true
+    },
+    {
+      "match_id": "1539013",
+      "home_team": "Congo DR",
+      "away_team": "Uzbekistan",
+      "outcome": "H",
+      "final_score": [
+        3,
+        1
+      ],
+      "n_ticks": 469,
+      "n_fills": 13,
       "has_derived": true
     },
     {
@@ -324,35 +454,48 @@
       "n_ticks": 344,
       "n_fills": 2,
       "has_derived": true
+    },
+    {
+      "match_id": "1561329",
+      "home_team": "South Africa",
+      "away_team": "Canada",
+      "outcome": "A",
+      "final_score": [
+        0,
+        1
+      ],
+      "n_ticks": 466,
+      "n_fills": 10,
+      "has_derived": true
     }
   ],
   "aggregate": {
-    "n_matches": 25,
-    "n_fills": 187,
+    "n_matches": 36,
+    "n_fills": 282,
     "stake_mode": "kelly",
-    "realized_pnl": 37.6,
+    "realized_pnl": -1.39,
     "fees_paid": 0.0,
-    "gross_pnl": 37.6,
-    "roi": 0.376,
-    "t_stat": 0.19,
+    "gross_pnl": -1.39,
+    "roi": -0.0139,
+    "t_stat": -0.01,
     "pnl_ci": [
-      -14.021,
-      17.479
+      -13.62,
+      14.841
     ],
-    "avg_clv": 0.0766,
-    "clv_n": 187,
-    "avg_clv_preoff": -0.0879,
-    "clv_n_preoff": 187,
-    "avg_clv_5m": 0.0037,
-    "clv_n_5m": 171,
+    "avg_clv": 0.04,
+    "clv_n": 282,
+    "avg_clv_preoff": -0.0817,
+    "clv_n_preoff": 282,
+    "avg_clv_5m": -0.0018,
+    "clv_n_5m": 257,
     "starting_bankroll": 100.0,
-    "ending_equity": 137.6,
+    "ending_equity": 98.61,
     "calibration": {
-      "n": 337.0,
-      "brier": 0.4228,
-      "log_loss": 0.7928,
-      "ece": 0.0289,
-      "calibration_factor": 0.8555
+      "n": 498.0,
+      "brier": 0.4259,
+      "log_loss": 0.7278,
+      "ece": 0.0317,
+      "calibration_factor": 0.8415
     }
   },
   "config": {
@@ -371,6 +514,6 @@
     "late_taper_minutes": 15,
     "late_taper_floor": 0.34,
     "bankroll": 100.0,
-    "kelly_factor": 0.8555
+    "kelly_factor": 0.8415
   }
 }

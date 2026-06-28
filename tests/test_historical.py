@@ -57,6 +57,20 @@ async def test_xg_only_mode_degrades_gracefully(cfg, tmp_path):
     await bt.aclose()
 
 
+def test_preoff_reference_is_earliest_captured_quote(cfg):
+    """``_reference_mid(at=None)`` must return the OPENING line — the earliest
+    captured quote — not the minimum-minute tick. A stray late tick stamped
+    minute 0 (a halftime/status reset or post-FT glitch) must NOT hijack the
+    pre-off CLV reference. Regression for the Colombia-Portugal contamination."""
+    bt = Backtester(cfg, trade=True)
+    tk = "KX-REGRESSION"
+    # Chronological capture order: opening line 0.535 at minute 1, then drift,
+    # then a stray minute-0 tick late in the stream at 0.435.
+    bt._mid_history[tk] = [(1, 0.535), (2, 0.505), (60, 0.470), (0, 0.435)]
+    assert bt._reference_mid(tk, at=None) == 0.535
+    assert bt._reference_mid("missing", at=None) is None
+
+
 def test_realized_outcome_matches_final_score():
     ticks = load_historical_match(json.loads(DATA.read_text()))
     final = ticks[-1][0]
