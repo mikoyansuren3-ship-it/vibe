@@ -233,7 +233,11 @@ class Backtester:
         if not hist:
             return None
         if at is None:
-            return min(hist, key=lambda mm: mm[0])[1]
+            # The opening line = the EARLIEST CAPTURED quote. ``hist`` is appended in
+            # chronological tick order, so ``hist[0]`` is the pre-off quote. (Do NOT use
+            # min-by-minute: a stray late tick stamped minute 0 — a halftime/status reset
+            # or post-FT glitch — would otherwise hijack the reference and corrupt CLV.)
+            return hist[0][1]
         minute, mid = min(hist, key=lambda mm: abs(mm[0] - at))
         return mid if abs(minute - at) <= tol else None
 
