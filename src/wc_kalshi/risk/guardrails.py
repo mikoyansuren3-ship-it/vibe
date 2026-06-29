@@ -57,7 +57,12 @@ class RiskLimits:
 class RiskManager:
     limits: RiskLimits = field(default_factory=RiskLimits)
     positions: dict[str, int] = field(default_factory=dict)  # ticker -> signed contracts
-    match_exposure: dict[str, float] = field(default_factory=dict)  # match_id -> $ at risk
+    match_exposure: dict[str, float] = field(default_factory=dict)  # match_id -> $ open at risk
+    # Per-ticker open capital-at-risk + its match. ``match_exposure`` is DERIVED from these
+    # so closing/reducing a position RELEASES exposure — the old ledger only ever added
+    # (it double-counted churn and prematurely choked new trades on a match).
+    _ticker_exposure: dict[str, float] = field(default_factory=dict)
+    _ticker_match: dict[str, str] = field(default_factory=dict)
     realized_pnl_today: float = 0.0
     unrealized_pnl: float = 0.0
     _day: date = field(default_factory=lambda: utcnow().date())
@@ -141,17 +146,53 @@ class RiskManager:
         contracts: int,
         cost_per_contract: float,
     ) -> None:
+        old = self.positions.get(market_ticker, 0)
         delta = contracts if action is OrderAction.BUY else -contracts
-        self.positions[market_ticker] = self.positions.get(market_ticker, 0) + delta
-        self.match_exposure[match_id] = (
-            self.match_exposure.get(match_id, 0.0) + contracts * cost_per_contract
+        new = old + delta
+        old_exp = self._ticker_exposure.get(market_ticker, 0.0)
+
+        if old == 0 or (old > 0) == (delta > 0):
+            # opening, or adding to the same side: capital at risk grows by the new cost.
+            new_exp = old_exp + contracts * cost_per_contract
+        elif abs(delta) < abs(old):
+            # partial close: release exposure pro-rata at the existing cost basis.
+            basis = old_exp / abs(old) if old else 0.0
+            new_exp = old_exp - abs(delta) * basis
+        elif abs(delta) == abs(old):
+            new_exp = 0.0  # fully closed — capital freed
+        else:
+            # flipped through zero: the overflow opens a new position at this cost.
+            new_exp = (abs(delta) - abs(old)) * cost_per_contract
+
+        self.positions[market_ticker] = new
+        if new == 0:
+            self._ticker_exposure.pop(market_ticker, None)
+            self._ticker_match.pop(market_ticker, None)
+        else:
+            self._ticker_exposure[market_ticker] = new_exp
+            self._ticker_match[market_ticker] = match_id
+        self._recompute_match_exposure(match_id)
+
+    def _recompute_match_exposure(self, match_id: str) -> None:
+        total = sum(
+            exp for tk, exp in self._ticker_exposure.items()
+            if self._ticker_match.get(tk) == match_id
         )
+        if total > 0:
+            self.match_exposure[match_id] = total
+        else:
+            self.match_exposure.pop(match_id, None)
 
     def record_realized_pnl(self, amount: float, *, match_id: str | None = None) -> None:
         self._rollover_if_new_day()
         self.realized_pnl_today += amount
         if match_id is not None:
+            # Settlement closes every market for the match — drop all its open exposure.
             self.match_exposure.pop(match_id, None)
+            for tk in [t for t, m in self._ticker_match.items() if m == match_id]:
+                self._ticker_exposure.pop(tk, None)
+                self._ticker_match.pop(tk, None)
+                self.positions[tk] = 0
         self._check_daily_loss()
 
     def update_unrealized(self, unrealized: float) -> None:

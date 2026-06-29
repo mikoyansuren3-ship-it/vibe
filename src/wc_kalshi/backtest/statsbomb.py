@@ -82,14 +82,19 @@ def _team_side(name: str | None, home: str, away: str) -> str | None:
     return None
 
 
-def _elo(name: str, elo_table: dict[str, float] | None) -> float | None:
-    """Date-appropriate Elo if an explicit table is supplied, else the built-in prior."""
+def _elo(
+    name: str, elo_table: dict[str, float] | None, *, allow_builtin_fallback: bool = False
+) -> float | None:
+    """Date-appropriate Elo from the supplied table. Falls back to the built-in 2026
+    ratings ONLY when explicitly allowed: injecting 2026 strengths into a 2018/2022 match
+    is anachronistic and poisons the backtest, so the honest default is no rating (the
+    model then uses its flat prior)."""
     if elo_table:
         c = canonical_team(name) or (name or "").strip()
         for key in (c, name):
             if key in elo_table:
                 return float(elo_table[key])
-    return elo_for(name)
+    return elo_for(name) if allow_builtin_fallback else None
 
 
 def convert_match(
@@ -98,6 +103,7 @@ def convert_match(
     *,
     settle_minute: int = 90,
     elo_table: dict[str, float] | None = None,
+    allow_builtin_fallback: bool = False,
 ) -> dict[str, Any] | None:
     """Convert one StatsBomb match (metadata + event stream) to a historical dict.
 
@@ -167,7 +173,8 @@ def convert_match(
             "home_red": state["home_red"], "away_red": state["away_red"],
         })
 
-    home_elo, away_elo = _elo(home, elo_table), _elo(away, elo_table)
+    home_elo = _elo(home, elo_table, allow_builtin_fallback=allow_builtin_fallback)
+    away_elo = _elo(away, elo_table, allow_builtin_fallback=allow_builtin_fallback)
     return {
         "match_id": f"SB-{sb_id}",
         "home_team": home,
@@ -183,7 +190,11 @@ def convert_match(
             "season": match_meta.get("season", {}).get("season_name"),
             "match_date": match_meta.get("match_date"),
             "stage": match_meta.get("competition_stage", {}).get("name"),
-            "elo_source": "elo_table" if elo_table else "builtin_ratings_2026",
+            "elo_source": (
+                "elo_table" if elo_table
+                else "builtin_ratings_2026" if allow_builtin_fallback
+                else "none"
+            ),
             "elo_coverage": {"home": home_elo is not None, "away": away_elo is not None},
         },
     }
@@ -222,8 +233,15 @@ def build_world_cup(
     elo_table: dict[str, float] | None = None,
     settle_minute: int = 90,
     limit: int | None = None,
+    allow_builtin_fallback: bool = False,
 ) -> list[dict[str, Any]]:
     """Fetch + convert every match of one World Cup into historical dicts."""
+    if not elo_table and not allow_builtin_fallback:
+        log.warning(
+            "no --elo-table for this historical build: ratings left UNSET (flat prior). "
+            "Pass a date-appropriate Elo table, or --allow-anachronistic-elo to use the "
+            "(wrong-era) built-in 2026 ratings."
+        )
     cache = Path(cache_dir)
     client = httpx.Client() if repo is None else None
     out: list[dict[str, Any]] = []
@@ -243,7 +261,8 @@ def build_world_cup(
                 log.warning("could not load events for %s: %s", mid, exc)
                 continue
             conv = convert_match(
-                meta, events, settle_minute=settle_minute, elo_table=elo_table
+                meta, events, settle_minute=settle_minute, elo_table=elo_table,
+                allow_builtin_fallback=allow_builtin_fallback,
             )
             if conv is not None:
                 out.append(conv)

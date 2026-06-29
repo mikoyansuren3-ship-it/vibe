@@ -14,6 +14,10 @@ missing, so an explicit feed or test fixture always wins.
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+
 from ..models.schemas import MatchContext
 
 # Approximate World-Football-Elo strength for likely 2026 World Cup nations.
@@ -84,9 +88,44 @@ def canonical_team(name: str | None) -> str | None:
     return _CANON.get(key)
 
 
+# Maintained-feed overlay. A JSON {team: elo} file pointed at by WCK_ELO_TABLE (or set via
+# set_active_elo_table) REPLACES the illustrative built-in ratings with no code edit — the
+# "replace with a real feed" hook this module promises. ``None`` = not yet initialised.
+_OVERRIDE: dict[str, float] | None = None
+
+
+def load_elo_table(path: str | Path) -> dict[str, float]:
+    """Load + canonicalize a maintained ``{team: elo}`` JSON feed."""
+    raw = json.loads(Path(path).expanduser().read_text())
+    return {(canonical_team(k) or k): float(v) for k, v in raw.items()}
+
+
+def set_active_elo_table(table: dict[str, float] | None) -> None:
+    """Install a maintained Elo feed as the live override (``None`` clears it)."""
+    global _OVERRIDE
+    _OVERRIDE = dict(table) if table else {}
+
+
+def _active_override() -> dict[str, float]:
+    global _OVERRIDE
+    if _OVERRIDE is None:  # lazy first-use load from env (after dotenv has run)
+        path = os.getenv("WCK_ELO_TABLE")
+        try:
+            _OVERRIDE = load_elo_table(path) if path else {}
+        except (OSError, ValueError):
+            _OVERRIDE = {}
+    return _OVERRIDE
+
+
 def elo_for(name: str | None) -> float | None:
-    """Best-effort Elo for a team name (None if we have no rating)."""
+    """Best-effort Elo for a team name (None if we have no rating). A maintained feed
+    (WCK_ELO_TABLE / set_active_elo_table) wins over the illustrative built-in table."""
     canon = canonical_team(name)
+    override = _active_override()
+    if canon and canon in override:
+        return override[canon]
+    if name and name in override:
+        return override[name]
     return TEAM_ELO.get(canon) if canon else None
 
 

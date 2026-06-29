@@ -52,13 +52,24 @@ def test_half_aware_minute_mapping_no_collision():
     assert _tick(d, 47)["away_xg"] == _tick(d, 45)["away_xg"]
 
 
-def test_elo_and_context_filled():
-    d = convert_match(META, EVENTS)
-    assert d["home_elo"] == 2140 and d["away_elo"] == 2080  # Argentina / France
-    assert d["neutral_venue"] is True
-    assert d["metadata"]["elo_coverage"] == {"home": True, "away": True}
-    assert d["metadata"]["stage"] == "Final"
-    assert d["metadata"]["match_date"] == "2022-12-18"
+def test_elo_uses_dated_table_not_anachronistic_builtin():
+    # Era-strict default: with no dated table the build leaves ratings UNSET rather than
+    # injecting 2026 Elo into a 2022 match (which would poison the backtest).
+    d0 = convert_match(META, EVENTS)
+    assert d0["home_elo"] is None and d0["away_elo"] is None
+    assert d0["metadata"]["elo_source"] == "none"
+    assert d0["metadata"]["elo_coverage"] == {"home": False, "away": False}
+    assert d0["neutral_venue"] is True
+    assert d0["metadata"]["stage"] == "Final"
+    assert d0["metadata"]["match_date"] == "2022-12-18"
+    # A date-appropriate table flows straight through.
+    d1 = convert_match(META, EVENTS, elo_table={"Argentina": 2110, "France": 2090})
+    assert d1["home_elo"] == 2110 and d1["away_elo"] == 2090
+    assert d1["metadata"]["elo_source"] == "elo_table"
+    assert d1["metadata"]["elo_coverage"] == {"home": True, "away": True}
+    # Opt-in restores the (clearly flagged) anachronistic built-in fallback.
+    d2 = convert_match(META, EVENTS, allow_builtin_fallback=True)
+    assert d2["home_elo"] == 2140 and d2["metadata"]["elo_source"] == "builtin_ratings_2026"
 
 
 def test_roundtrips_through_loader_and_settles_home():
@@ -109,6 +120,6 @@ def test_match_without_xg_is_skipped():
 
 
 def test_coverage_report():
-    d = convert_match(META, EVENTS)
+    d = convert_match(META, EVENTS, elo_table={"Argentina": 2110, "France": 2090})
     rep = coverage_report([d])
     assert rep["n_matches"] == 1 and rep["full_elo"] == 1 and rep["avg_ticks"] == 91.0

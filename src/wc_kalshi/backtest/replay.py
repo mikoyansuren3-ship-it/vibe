@@ -95,6 +95,32 @@ def edge_verdict(ci: tuple[float, float]) -> str:
     return "negative" if hi < 0.0 else "positive"
 
 
+class DataSource:
+    """The four metric namespaces. CLV/edge from real Kalshi quotes, a synthetic market,
+    StatsBomb calibration (no prices at all), and Betfair lines are DIFFERENT measurements
+    on DIFFERENT data — they must never be pooled or averaged together. Every result is
+    tagged so the UI/manifest can't silently conflate them (see ``require_same_source``)."""
+
+    SYNTHETIC = "synthetic"  # simulated matches + simulated market — CI/sample-data only
+    KALSHI_REPLAY = "kalshi_replay"  # real recorded Kalshi quotes — the published headline
+    STATSBOMB_CALIBRATION = "statsbomb_calibration"  # real xG, NO prices — calibration only
+    BETFAIR_EDGE = "betfair_edge"  # real xG + Betfair lines — exchange edge, NOT Kalshi CLV
+    ALL = frozenset({SYNTHETIC, KALSHI_REPLAY, STATSBOMB_CALIBRATION, BETFAIR_EDGE})
+
+
+def require_same_source(*results: "BacktestResult") -> str:
+    """Guard against the project's cardinal sin: averaging metrics across data namespaces.
+    Raises if the results don't all share one ``data_source``; returns that source.
+    Use this anywhere results are combined so conflation fails loudly, not silently."""
+    sources = {r.data_source for r in results}
+    if len(sources) > 1:
+        raise ValueError(
+            f"refusing to combine metrics across data sources: {sorted(sources)} — these are "
+            "different measurements (real Kalshi / synthetic / StatsBomb / Betfair), not one pool."
+        )
+    return next(iter(sources)) if sources else "unknown"
+
+
 @dataclass
 class BacktestResult:
     n_matches: int = 0
@@ -108,6 +134,7 @@ class BacktestResult:
     calibration: dict[str, float] = field(default_factory=dict)
     reliability: list[dict[str, float]] = field(default_factory=list)
     stake_mode: str = "kelly"  # "kelly" (compounding) | "fixed" (constant stake)
+    data_source: str = "unknown"  # one of DataSource.* — the namespace this metric lives in
     avg_clv: float = 0.0  # mean closing-line value per contract (probability units)
     clv_n: int = 0  # number of fills with a usable closing price
     # In-play CLV vs the LAST observed tick is degenerate near full time (prices -> 0/1),
@@ -151,6 +178,7 @@ class BacktestResult:
             "n_matches": self.n_matches,
             "n_fills": self.n_fills,
             "stake_mode": self.stake_mode,
+            "data_source": self.data_source,
             "realized_pnl": round(self.realized_pnl, 2),
             "fees_paid": round(self.fees_paid, 2),
             "gross_pnl": round(self.gross_pnl, 2),
@@ -188,6 +216,7 @@ class BacktestResult:
             f"  gross P&L (pre-fee):{self.gross_pnl:+.2f}",
             f"  ROI:                {self.roi*100:+.2f}%",
             f"  stake mode:         {self.stake_mode}",
+            f"  data source:        {self.data_source}",
             f"  per-match t-stat:   {self.t_stat:.2f}  ({'valid' if self.stake_mode == 'fixed' else 'IGNORE: compounding'})",
             f"  per-match mean 95% CI: [{self.pnl_ci[0]:+.3f}, {self.pnl_ci[1]:+.3f}]  (bootstrap)",
             "-" * 60,
@@ -368,6 +397,7 @@ class Backtester:
             equity_curve.append(rt.portfolio.equity(rt.last_mids))
         result = self._collect(per_match, equity_curve)
         result.n_fills = n_fills
+        result.data_source = DataSource.SYNTHETIC
         return result
 
     async def run_replay(
@@ -408,6 +438,7 @@ class Backtester:
             equity_curve.append(self.rt.portfolio.equity(self.rt.last_mids))
         result = self._collect(per_match, equity_curve)
         result.n_fills = n_fills
+        result.data_source = DataSource.KALSHI_REPLAY
         return result
 
     async def run_historical(self, matches: list) -> BacktestResult:
@@ -450,6 +481,9 @@ class Backtester:
             equity_curve.append(rt.portfolio.equity(rt.last_mids))
         result = self._collect(per_match, equity_curve)
         result.n_fills = n_fills
+        result.data_source = (
+            DataSource.BETFAIR_EDGE if has_market_data(matches) else DataSource.STATSBOMB_CALIBRATION
+        )
         return result
 
     async def _run_match(self, snaps: list[MatchSnapshot]) -> int:
