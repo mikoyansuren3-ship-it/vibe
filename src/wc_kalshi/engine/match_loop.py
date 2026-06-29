@@ -172,6 +172,11 @@ class TickProcessor:
         if last is not None and (match.minute - last) < cfg.execution.min_retrade_minutes:
             return
 
+        # Strategy filters (sell-only / no-late-entry). Pre-registered hypotheses, default
+        # off; see config.StrategySection. Honest ceiling is "less bad", not "+edge".
+        if not self._passes_strategy_filter(edge, match):
+            return
+
         # Adverse-selection guard: if the price we'd transact at has moved against us
         # versus the signal price beyond tolerance, skip — we only get filled when wrong.
         if self._adversely_selected(edge, market_snaps):
@@ -235,6 +240,17 @@ class TickProcessor:
             # Score calibration on exactly the prediction we traded on.
             if probs is not None:
                 mstate.pred_samples.append(probs)
+
+    def _passes_strategy_filter(self, edge, match) -> bool:
+        """Apply the pre-registered strategy filters (default off → always True)."""
+        s = self.rt.cfg.strategy
+        if s.sell_only and edge.action is not OrderAction.SELL:
+            return False
+        if s.disable_buys and edge.action is OrderAction.BUY:
+            return False
+        if s.max_entry_minute is not None and match.minute > s.max_entry_minute:
+            return False
+        return True
 
     def _adversely_selected(self, edge, market_snaps) -> bool:
         """True if the executable price moved against us beyond tolerance since the
