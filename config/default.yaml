@@ -74,6 +74,10 @@ edge:
   min_edge_after_costs: 0.03  # required edge AFTER subtracting fees+spread+slippage
   slippage_cents: 1           # assumed adverse slippage per contract, in cents
   devig_method: proportional  # proportional | shin | power
+  # Market-as-prior shrinkage. p_eff ∝ p_model**w · p_market**(1-w). 1.0 = pure model
+  # (default; unchanged behaviour). Lower it ONLY after validating on held-out data
+  # (scripts/eval_market_pool.py) — the market is usually sharper than this model.
+  market_pool_weight: 1.0
 
 risk:
   starting_bankroll: 1000.0   # paper/demo notional bankroll for Kelly sizing

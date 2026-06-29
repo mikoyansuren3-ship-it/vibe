@@ -130,6 +130,12 @@ class EdgeSection(BaseModel):
     min_edge_after_costs: float = 0.03
     slippage_cents: int = 1
     devig_method: str = "proportional"
+    # Market-as-prior shrinkage: blend the model with the de-vigged market via a
+    # log-opinion pool, p_eff ∝ p_model**w · p_market**(1-w). 1.0 = pure model (today's
+    # behaviour); <1 trusts the (sharper) market more, so we only deviate on real residual
+    # signal. Validate w ONLY on held-out data (scripts/eval_market_pool.py) — never tune
+    # it on the same matches you then report.
+    market_pool_weight: float = 1.0
 
 
 class RiskSection(BaseModel):

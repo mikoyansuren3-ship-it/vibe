@@ -19,6 +19,26 @@ from ..models.schemas import EdgeSignal, OrderAction, Outcome, Probabilities
 if TYPE_CHECKING:
     from ..config import AppConfig
 
+_OUTCOMES = (Outcome.HOME, Outcome.DRAW, Outcome.AWAY)
+
+
+def market_pooled(model: Probabilities, market: MarketView, w: float) -> dict[Outcome, float]:
+    """Log-opinion pool of the model with the de-vigged market: p ∝ p_model**w · p_market**(1-w).
+
+    ``w=1`` returns the model unchanged (today's behaviour); ``w=0`` returns the market.
+    Only pools when the FULL 1X2 book is de-vigged (all three outcomes present) — with a
+    partial book there's no coherent market vector to shrink toward, so we keep the model.
+    """
+    probs = {o: model.get(o) for o in _OUTCOMES}
+    if w >= 1.0 or not all(o in market.outcomes for o in _OUTCOMES):
+        return probs
+    pooled = {
+        o: max(probs[o], 1e-9) ** w * max(market.outcomes[o].implied_prob, 1e-9) ** (1.0 - w)
+        for o in _OUTCOMES
+    }
+    z = sum(pooled.values())
+    return {o: pooled[o] / z for o in _OUTCOMES} if z > 0 else probs
+
 
 class EdgeDetector:
     def __init__(
@@ -31,6 +51,7 @@ class EdgeDetector:
         maker_fraction: float = 0.25,
         min_price: float = 0.03,
         max_price: float = 0.97,
+        market_pool_weight: float = 1.0,
     ) -> None:
         self.min_edge = min_edge
         self.min_edge_after_costs = min_edge_after_costs
@@ -39,6 +60,7 @@ class EdgeDetector:
         self.maker_fraction = maker_fraction
         self.min_price = min_price
         self.max_price = max_price
+        self.market_pool_weight = market_pool_weight
 
     @classmethod
     def from_config(cls, cfg: "AppConfig") -> "EdgeDetector":
@@ -50,16 +72,19 @@ class EdgeDetector:
             maker_fraction=cfg.kalshi.maker_fee_fraction,
             min_price=cfg.risk.min_price,
             max_price=cfg.risk.max_price,
+            market_pool_weight=cfg.edge.market_pool_weight,
         )
 
     def evaluate(self, model: Probabilities, market: MarketView) -> list[EdgeSignal]:
+        # Shrink the model toward the (sharper) de-vigged market before judging edges, so
+        # we only act on the residual the model adds. At weight 1.0 this is a no-op.
+        eff = market_pooled(model, market, self.market_pool_weight)
         signals: list[EdgeSignal] = []
         for outcome, om in market.outcomes.items():
-            signals.append(self._evaluate_one(outcome, model, om, market))
+            signals.append(self._evaluate_one(outcome, eff.get(outcome, model.get(outcome)), model.match_id, om, market))
         return signals
 
-    def _evaluate_one(self, outcome: Outcome, model: Probabilities, om, market) -> EdgeSignal:
-        model_p = model.get(outcome)
+    def _evaluate_one(self, outcome: Outcome, model_p: float, match_id: str, om, market) -> EdgeSignal:
         implied = om.implied_prob
         raw_edge = model_p - implied
         ask = om.yes_ask / 100.0 if om.yes_ask is not None else None
@@ -98,7 +123,7 @@ class EdgeDetector:
         reason = self._reason(action, exec_price, net_edge, gross, om)
 
         return EdgeSignal(
-            match_id=model.match_id,
+            match_id=match_id,
             outcome=outcome,
             market_ticker=om.market_ticker,
             model_prob=model_p,
