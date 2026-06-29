@@ -238,18 +238,29 @@ class TickProcessor:
 
     def _adversely_selected(self, edge, market_snaps) -> bool:
         """True if the executable price moved against us beyond tolerance since the
-        signal. Compares the edge's signal price to the latest book on the trade side."""
+        signal (we only get filled when we're wrong). Compares the edge's signal price to
+        the latest book on the trade side.
+
+        Fails CLOSED when the current price can't be verified (no quote for the market this
+        tick, or our side of the book vanished): firing blind there IS the adverse case.
+        In a backtest the signal price IS this tick's quote, so those branches never
+        trigger — this only tightens live behaviour. A genuinely absent signal price
+        (e.g. synthetic feeds) leaves the guard inapplicable (allow)."""
         tol = getattr(self.rt.cfg.execution, "max_adverse_cents", 0)
-        if not tol or tol <= 0:
+        if not tol or tol <= 0 or edge.action is None:
             return False
         snap = next((s for s in market_snaps if s.market_ticker == edge.market_ticker), None)
-        if snap is None or edge.action is None:
-            return False
+        if snap is None:
+            return True  # no current quote — can't confirm the price held; don't fire blind
         if edge.action is OrderAction.BUY:
             signal, now = edge.market_yes_ask, snap.yes_ask
-            return signal is not None and now is not None and now > signal + tol
-        signal, now = edge.market_yes_bid, snap.yes_bid
-        return signal is not None and now is not None and now < signal - tol
+        else:
+            signal, now = edge.market_yes_bid, snap.yes_bid
+        if signal is None:
+            return False  # no signal price to compare against — guard inapplicable
+        if now is None:
+            return True  # our side of the book vanished — can't verify; fail closed
+        return now > signal + tol if edge.action is OrderAction.BUY else now < signal - tol
 
     def _late_game_taper(self, match) -> float:
         """Shrink size toward a floor as the match nears full time."""

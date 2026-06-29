@@ -1,5 +1,7 @@
 """Always-on guardrails + kill switch."""
 
+import pytest
+
 from wc_kalshi.models.schemas import OrderAction
 from wc_kalshi.risk.guardrails import RiskLimits, RiskManager
 
@@ -71,6 +73,38 @@ def test_register_fill_updates_position_and_exposure():
     # selling reduces the net position
     rm.register_fill(match_id="m1", market_ticker="t", action=OrderAction.SELL, contracts=4, cost_per_contract=0.5)
     assert rm.positions["t"] == 6
+
+
+def test_closing_a_position_releases_exposure():
+    rm = _rm()
+    rm.register_fill(match_id="m1", market_ticker="t", action=OrderAction.BUY, contracts=100, cost_per_contract=0.5)
+    assert rm.match_exposure["m1"] == pytest.approx(50.0)
+    # partial close releases exposure pro-rata (the old add-only ledger grew to 75 here)
+    rm.register_fill(match_id="m1", market_ticker="t", action=OrderAction.SELL, contracts=50, cost_per_contract=0.5)
+    assert rm.positions["t"] == 50
+    assert rm.match_exposure["m1"] == pytest.approx(25.0)
+    # full close frees it entirely
+    rm.register_fill(match_id="m1", market_ticker="t", action=OrderAction.SELL, contracts=50, cost_per_contract=0.5)
+    assert rm.match_exposure.get("m1", 0.0) == 0.0
+    assert rm.total_open_exposure == 0.0
+
+
+def test_round_trip_churn_does_not_choke_new_trades():
+    rm = _rm(max_match=60.0)
+    rm.register_fill(match_id="m1", market_ticker="t", action=OrderAction.BUY, contracts=100, cost_per_contract=0.5)
+    rm.register_fill(match_id="m1", market_ticker="t", action=OrderAction.SELL, contracts=100, cost_per_contract=0.5)
+    # exposure is back to 0, so a fresh trade still fits under the per-match cap.
+    # (The old add-only ledger would read $100 used and reject this.)
+    d = rm.pre_trade_check(match_id="m1", market_ticker="t2", action=OrderAction.BUY, contracts=100, cost_per_contract=0.5, price=0.5)
+    assert d.approved and d.contracts == 100
+
+
+def test_settlement_clears_match_exposure():
+    rm = _rm()
+    rm.register_fill(match_id="m1", market_ticker="t", action=OrderAction.BUY, contracts=10, cost_per_contract=0.5)
+    rm.record_realized_pnl(5.0, match_id="m1")
+    assert rm.match_exposure.get("m1", 0.0) == 0.0
+    assert rm.total_open_exposure == 0.0
 
 
 def test_on_halt_callback_fires():

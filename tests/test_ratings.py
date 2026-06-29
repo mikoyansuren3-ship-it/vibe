@@ -23,6 +23,29 @@ def test_elo_lookup():
     assert elo_for("totally unknown") is None
 
 
+def test_maintained_feed_overrides_builtin():
+    from wc_kalshi.modeling.ratings import set_active_elo_table
+
+    try:
+        set_active_elo_table({"Argentina": 1500.0, "Canada": 1900.0})
+        assert elo_for("Argentina") == 1500.0  # the feed wins over the built-in 2140
+        assert elo_for("Canada") == 1900.0
+        assert elo_for("France") == 2080  # team absent from the feed -> built-in fallback
+    finally:
+        set_active_elo_table(None)  # reset so other tests see the built-in table
+
+
+def test_load_elo_table_canonicalizes(tmp_path):
+    import json
+
+    from wc_kalshi.modeling.ratings import load_elo_table
+
+    p = tmp_path / "elo.json"
+    p.write_text(json.dumps({"United States": 1800, "Czech Republic": 1790}))
+    t = load_elo_table(p)
+    assert t["USA"] == 1800.0 and t["Czechia"] == 1790.0
+
+
 def test_host_nation_is_not_neutral():
     assert infer_neutral_venue("USA") is False  # host plays at home
     assert infer_neutral_venue("Brazil") is True  # neutral WC venue

@@ -295,6 +295,7 @@ def _cmd_statsbomb(args) -> int:
         elo_table=elo_table,
         settle_minute=args.settle_minute,
         limit=args.limit,
+        allow_builtin_fallback=getattr(args, "allow_anachronistic_elo", False),
     )
     if not matches:
         print("no matches converted (no per-shot xG for this season?)", file=sys.stderr)
@@ -476,6 +477,8 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--out", required=True, help="output historical JSONL path")
     sb.add_argument("--repo", default=None, help="local clone of statsbomb/open-data (offline)")
     sb.add_argument("--elo-table", default=None, help="JSON {team: elo} for date-appropriate priors")
+    sb.add_argument("--allow-anachronistic-elo", action="store_true",
+                    help="fall back to built-in 2026 ratings when no --elo-table (WRONG era; off by default)")
     sb.add_argument("--betfair", default=None, help="Betfair historical file/dir to merge for CLV")
     sb.add_argument("--betfair-tolerance", type=int, default=2, help="max minutes when snapping quotes to ticks")
     sb.add_argument("--settle-minute", type=int, default=90, help="regulation settlement minute")
