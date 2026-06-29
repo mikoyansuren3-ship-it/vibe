@@ -79,6 +79,14 @@ edge:
   # (scripts/eval_market_pool.py) — the market is usually sharper than this model.
   market_pool_weight: 1.0
 
+strategy:
+  # Post-hoc trade filters (mirror the web sandbox). Default OFF. Treat as HYPOTHESES to
+  # validate on held-out data (scripts/eval_strategy_filters.py) — never flip from in-sample
+  # CLV. Honest ceiling is "less bad", not "+edge".
+  sell_only: false            # only act on SELL (fade) edges
+  disable_buys: false         # drop BUY (back) edges
+  max_entry_minute: null      # e.g. 70 — no new entries after this match minute
+
 risk:
   starting_bankroll: 1000.0   # paper/demo notional bankroll for Kelly sizing
   kelly_fraction: 0.25        # fractional Kelly (NEVER 1.0)

@@ -138,6 +138,20 @@ class EdgeSection(BaseModel):
     market_pool_weight: float = 1.0
 
 
+class StrategySection(BaseModel):
+    """Post-hoc trade filters (mirror the web/lib/sim sandbox levers). Default OFF — no
+    behaviour change. These are HYPOTHESES to validate on held-out data
+    (scripts/eval_strategy_filters.py), NOT knobs to flip from in-sample CLV. Their honest
+    ceiling is 'less bad', never '+edge': sell-only has a mechanistic prior (backs pay the
+    spread on the expensive side and the detector charges taker fee on a fully-filling
+    cross-spread, so backing is structurally the more −EV side); late entries bleed as
+    in-play variance collapses near settlement."""
+
+    sell_only: bool = False  # only act on SELL (fade) edges
+    disable_buys: bool = False  # drop BUY (back) edges
+    max_entry_minute: int | None = None  # no NEW entries after this match minute
+
+
 class RiskSection(BaseModel):
     starting_bankroll: float = 1000.0
     kelly_fraction: float = 0.25
@@ -240,6 +254,7 @@ class AppConfig(BaseModel):
     football: FootballSection
     model: ModelSection
     edge: EdgeSection
+    strategy: StrategySection = Field(default_factory=StrategySection)
     risk: RiskSection
     execution: ExecutionSection
     dashboard: DashboardSection
