@@ -44,18 +44,29 @@ export async function loadAllBundles(ids: string[]): Promise<Bundle[]> {
 const BLOB_BASE =
   process.env.NEXT_PUBLIC_BLOB_BASE || "https://tgk7qzxearwylitn.public.blob.vercel-storage.com";
 
+export interface LiveResult {
+  bundles: Bundle[];
+  /** epoch ms when the publisher generated the feed, or null if unknown/unreachable.
+   * Used to show an honest "updated Nm ago / live feed offline" state — the Blob
+   * publisher can silently go stale (e.g. a suspended store) and we must not pretend. */
+  generatedAt: number | null;
+}
+
 /** Poll all in-progress matches (empty if none live). ~1-min lag by design.
  * Reads the multi-game `bundles` array, falling back to the legacy single
  * `bundle` field for older live.json payloads. */
-export async function loadLive(): Promise<Bundle[]> {
+export async function loadLive(): Promise<LiveResult> {
   try {
     const r = await fetch(`${BLOB_BASE}/live.json?t=${Date.now()}`, { cache: "no-store" });
-    if (!r.ok) return [];
+    if (!r.ok) return { bundles: [], generatedAt: null };
     const doc = await r.json();
-    if (!doc || !doc.live) return [];
-    if (Array.isArray(doc.bundles)) return doc.bundles as Bundle[];
-    return doc.bundle ? [doc.bundle as Bundle] : [];
+    const generatedAt = doc?.generated_at ? Date.parse(doc.generated_at) || null : null;
+    if (!doc || !doc.live) return { bundles: [], generatedAt };
+    const bundles = Array.isArray(doc.bundles)
+      ? (doc.bundles as Bundle[])
+      : doc.bundle ? [doc.bundle as Bundle] : [];
+    return { bundles, generatedAt };
   } catch {
-    return [];
+    return { bundles: [], generatedAt: null };
   }
 }

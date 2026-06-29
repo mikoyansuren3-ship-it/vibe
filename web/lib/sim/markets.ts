@@ -12,14 +12,18 @@ export interface ContractSignal {
   edge: number | null; // model − mid (signed; + favors YES/back)
   action: Action | null; // buy (back YES) | sell (fade YES) | null
   netEdge: number | null; // edge after fee+slippage at the executable side
-  wouldBet: boolean; // passes the engine's actionable thresholds
+  // Passes the engine's per-contract edge thresholds IN ISOLATION. This is NOT the
+  // same as "the engine would take it": the engine trades only the 1X2 legs (never the
+  // derived board) and at most the single strongest leg per tick. The caller decides
+  // what's actually taken — see LiveBets.
+  meetsBar: boolean;
 }
 
-/** Evaluate one live contract: model price vs market, and whether the engine would bet it. */
+/** Evaluate one live contract: model price vs market, and whether it clears the edge bar. */
 export function evalContract(c: LiveContract, cfg: SimConfig): ContractSignal {
   const mid = c.mid;
   if (c.model == null || mid == null || c.bid == null || c.ask == null) {
-    return { modelP: c.model, mid, edge: null, action: null, netEdge: null, wouldBet: false };
+    return { modelP: c.model, mid, edge: null, action: null, netEdge: null, meetsBar: false };
   }
   const modelP = c.model;
   const edge = modelP - mid;
@@ -40,12 +44,12 @@ export function evalContract(c: LiveContract, cfg: SimConfig): ContractSignal {
     netEdge = bid - modelP - kalshiFee(1, bid, cfg.fee_coefficient) - slip;
   }
 
-  const wouldBet =
+  const meetsBar =
     action != null &&
     netEdge >= cfg.min_edge_after_costs &&
     Math.abs(edge) >= cfg.min_edge &&
     execPrice >= cfg.min_price &&
     execPrice <= cfg.max_price;
 
-  return { modelP, mid, edge, action, netEdge, wouldBet };
+  return { modelP, mid, edge, action, netEdge, meetsBar };
 }

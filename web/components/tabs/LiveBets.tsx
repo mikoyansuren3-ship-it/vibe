@@ -23,7 +23,8 @@ interface Line {
   mid: number | null;
   edge: number | null;
   action: "buy" | "sell" | null;
-  wouldBet: boolean;
+  meetsBar: boolean; // clears the edge bar in isolation
+  taken: boolean;    // the engine would actually take this (1X2 strongest leg per tick only)
 }
 
 function EdgeCell({ ln }: { ln: Line }) {
@@ -34,8 +35,10 @@ function EdgeCell({ ln }: { ln: Line }) {
       <span className={`mono ${cls(ln.edge ?? 0)}`} title="model − market" style={{ minWidth: 52, textAlign: "right" }}>
         {ln.edge == null ? "" : signed(ln.edge, 2)}
       </span>
-      {ln.wouldBet ? (
-        <span className={`tag2 ${ln.action === "buy" ? "back" : "fade"}`}>{verb} ✓</span>
+      {ln.taken ? (
+        <span className={`tag2 ${ln.action === "buy" ? "back" : "fade"}`} title="the engine takes this leg (strongest 1X2 leg this tick)">{verb} ✓</span>
+      ) : ln.meetsBar ? (
+        <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }} title="clears the edge bar in isolation — but the engine trades only 1X2 and only the strongest leg per tick">meets bar</span>
       ) : (
         <span className="note" style={{ margin: 0, fontSize: 11 }}>no bet</span>
       )}
@@ -65,13 +68,15 @@ function ContractRow({ ln }: { ln: Line }) {
 function Group({ title, sub, lines, openDefault }: { title: string; sub?: string; lines: Line[]; openDefault?: boolean }) {
   const [open, setOpen] = useState(!!openDefault);
   if (lines.length === 0) return null;
-  const nBet = lines.filter((l) => l.wouldBet).length;
+  const nTaken = lines.filter((l) => l.taken).length;
+  const nBar = lines.filter((l) => l.meetsBar).length;
   return (
     <div className={`betcard ${open ? "open" : ""}`}>
       <div className="head" onClick={() => setOpen((o) => !o)}>
         <div><div className="title">{title}</div>{sub && <div className="desc">{sub}</div>}</div>
-        {nBet > 0 && <span className="tag2 back" style={{ marginLeft: "auto" }}>{nBet} edge</span>}
-        <span className="count" style={{ marginLeft: nBet > 0 ? 8 : "auto" }}>{lines.length}</span>
+        {nTaken > 0 && <span className="tag2 back" style={{ marginLeft: "auto" }}>{nTaken} taken</span>}
+        {nBar > 0 && <span className="count" style={{ marginLeft: nTaken > 0 ? 8 : "auto", color: "var(--muted)" }} title="contracts that clear the edge bar but the bot doesn't trade">{nBar} meets bar</span>}
+        <span className="count" style={{ marginLeft: nTaken > 0 || nBar > 0 ? 8 : "auto" }}>{lines.length}</span>
         <span className="chev">›</span>
       </div>
       {open && <div className="betlist">{lines.map((ln, i) => <ContractRow key={i} ln={ln} />)}</div>}
@@ -81,7 +86,9 @@ function Group({ title, sub, lines, openDefault }: { title: string; sub?: string
 
 function contractToLine(c: LiveContract, cfg: Bundle["config"]): Line {
   const s = evalContract(c, cfg);
-  return { label: c.label, modelP: s.modelP, mid: s.mid, edge: s.edge, action: s.action, wouldBet: s.wouldBet };
+  // The engine trades ONLY 1X2 — the derived board is research-only, so taken is always
+  // false here regardless of edge. meetsBar flags contracts that merely clear the bar.
+  return { label: c.label, modelP: s.modelP, mid: s.mid, edge: s.edge, action: s.action, meetsBar: s.meetsBar, taken: false };
 }
 
 function LiveGame({ bundle, bankroll, kellyFraction, filters }: {
@@ -107,12 +114,20 @@ function LiveGame({ bundle, bankroll, kellyFraction, filters }: {
     OUTS.some((o) => { const q = t.markets[o]; return q && q[0] != null && q[1] != null; })
   );
   const sigs = lastQuoted ? evaluateTick(lastQuoted, bundle.config) : [];
+  // The engine takes only the single strongest actionable leg per tick
+  // (one_trade_per_match_tick), so exactly one 1X2 line can be "taken" — not every
+  // actionable one. The rest, if actionable, merely "meet the bar".
+  const strongest = sigs
+    .filter((s) => s.actionable)
+    .reduce<(typeof sigs)[number] | null>((best, s) => (best == null || s.netEdge > best.netEdge ? s : best), null);
   const oneX2: Line[] = OUTS.filter((o) => sigs.some((s) => s.outcome === o)).map((o) => {
     const s = sigs.find((x) => x.outcome === o)!;
+    const taken = strongest != null && strongest.outcome === o;
     return {
       label: outcomeName(bundle, o), color: OUT_HEX[o],
       modelP: s.modelP, mid: s.implied, edge: s.modelP - s.implied,
-      action: s.rawEdge > 0 ? "buy" : s.rawEdge < 0 ? "sell" : null, wouldBet: s.actionable,
+      action: s.rawEdge > 0 ? "buy" : s.rawEdge < 0 ? "sell" : null,
+      meetsBar: s.actionable && !taken, taken,
     };
   });
 
@@ -157,10 +172,10 @@ function LiveGame({ bundle, bankroll, kellyFraction, filters }: {
         </div>
       </div>
 
-      {/* Every possible bet. */}
-      <Group title="Match result (1X2)" sub="the market the bot actually trades" lines={oneX2} openDefault />
+      {/* Every possible bet. Only the 1X2 group is tradeable (≤1 leg/tick); the rest is research. */}
+      <Group title="Match result (1X2)" sub="the only market the bot trades — at most one leg per tick" lines={oneX2} openDefault />
       {priceable.map((g) => (
-        <Group key={g.series} title={g.label} sub="model-priced — shown with edge & would-bet" lines={g.contracts.map((c) => contractToLine(c, bundle.config))} />
+        <Group key={g.series} title={g.label} sub="model-priced — research only; the bot doesn't trade this" lines={g.contracts.map((c) => contractToLine(c, bundle.config))} />
       ))}
       {marketOnly.map((g) => (
         <Group key={g.series} title={g.label} sub="market price only — the model can't price this" lines={g.contracts.map((c) => contractToLine(c, bundle.config))} />
@@ -169,15 +184,38 @@ function LiveGame({ bundle, bankroll, kellyFraction, filters }: {
   );
 }
 
-export function LiveBets({ bundles, bankroll, kellyFraction, filters }: {
-  bundles: Bundle[]; bankroll: number; kellyFraction: number; filters: Filters;
+function freshness(updatedAt?: number | null): { text: string; stale: boolean } {
+  if (!updatedAt) return { text: "live feed offline", stale: true };
+  const mins = Math.floor((Date.now() - updatedAt) / 60000);
+  if (mins > 5) return { text: `feed stale — updated ${mins}m ago`, stale: true };
+  return { text: mins <= 0 ? "updated just now" : `updated ${mins}m ago`, stale: false };
+}
+
+export function LiveBets({ bundles, bankroll, kellyFraction, filters, updatedAt }: {
+  bundles: Bundle[]; bankroll: number; kellyFraction: number; filters: Filters; updatedAt?: number | null;
 }) {
-  if (bundles.length === 0) return null;
+  const fresh = freshness(updatedAt);
+  // No live games is normal; only flag the feed as offline when we couldn't even reach
+  // the publisher (updatedAt === null) — never pretend a stale/suspended feed is live.
+  if (bundles.length === 0) {
+    if (updatedAt == null) {
+      return (
+        <div className="note" style={{ marginBottom: 18 }}>
+          <span className="livedot" style={{ background: "var(--muted)" }} /> Live feed offline — couldn’t reach the publisher. Showing settled games only.
+        </div>
+      );
+    }
+    return null;
+  }
   return (
     <div style={{ marginBottom: 26 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Live now</h2>
         <span className="note" style={{ margin: 0 }}>{bundles.length} game{bundles.length > 1 ? "s" : ""} in progress — every Kalshi contract, even the ones the bot ignores.</span>
+        <span className="mono" title="how fresh the live feed is (published on a ~60s timer)"
+          style={{ marginLeft: "auto", fontSize: 11, color: fresh.stale ? "var(--red)" : "var(--muted)" }}>
+          {fresh.text}
+        </span>
       </div>
       {bundles.map((b) => (
         <LiveGame key={b.match_id} bundle={b} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} />

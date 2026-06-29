@@ -49,10 +49,6 @@ football:
   # Simulated-market xG awareness: 0 = blind (original), 1 = fully prices live xG.
   sim_market_xg_awareness: 0.0
 
-consensus:
-  polymarket_enabled: false
-  polymarket_gamma_base: "https://gamma-api.polymarket.com"
-
 model:
   name: dixon_coles_inplay
   base_home_xg: 1.45          # league-average full-match home expected goals

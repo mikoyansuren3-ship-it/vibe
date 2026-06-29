@@ -13,11 +13,15 @@ recorder stored at capture time. Read-only over the DB.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..config import AppConfig
+from ..config import REPO_ROOT, AppConfig
 from ..models.db import Database
 from ..models.schemas import MatchSnapshot
 from ..modeling.derived import (
@@ -91,6 +95,85 @@ def _derived_settles_yes(series, strike, sub, home, away, hs, as_):
     if series == "KXWCTEAMTOTAL":
         return side > strike
     return None
+
+
+def _coverage(match_snaps: list[MatchSnapshot]) -> dict[str, Any]:
+    """Per-match capture quality. ``preoff_is_kickoff`` is the honesty flag: when the
+    first captured snapshot is already mid-game, the "pre-off" CLV reference is really a
+    mid-match line and the match should be excluded from the kickoff-only headline."""
+    if not match_snaps:
+        return {}
+    first_min = match_snaps[0].minute
+    gaps: list[float] = []
+    for a, b in zip(match_snaps, match_snaps[1:]):
+        try:
+            gaps.append((b.ts - a.ts).total_seconds())
+        except (TypeError, AttributeError):
+            pass
+    gaps.sort()
+    p95 = gaps[min(len(gaps) - 1, int(0.95 * len(gaps)))] if gaps else None
+    return {
+        "first_capture_minute": first_min,
+        "last_capture_minute": match_snaps[-1].minute,
+        "n_snaps": len(match_snaps),
+        "tick_gap_p95_seconds": round(p95, 1) if p95 is not None else None,
+        "preoff_is_kickoff": bool(first_min <= 2),
+    }
+
+
+def _git_sha() -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _provenance(cfg: AppConfig, db_path: str, stake_mode: str) -> dict[str, Any]:
+    """Reproducibility envelope: which code + config + data produced these numbers.
+
+    The model probabilities/Brier/ECE in every bundle are RECOMPUTED with the current
+    model code at export time (not the values stored at capture), so without this stamp
+    a later tweak to xg_proxy.py would silently change the published headline with no
+    audit trail. ``config_sha256`` excludes secrets."""
+    cfg_dump = cfg.model_dump(mode="json", exclude={"secrets"})
+    cfg_sha = hashlib.sha256(
+        json.dumps(cfg_dump, sort_keys=True, default=str).encode()
+    ).hexdigest()[:16]
+
+    fp = db_path[len("sqlite:///"):] if db_path.startswith("sqlite:///") else db_path
+    db_info: dict[str, Any] = {}
+    try:
+        st = os.stat(fp)
+        h = hashlib.sha256()
+        with open(fp, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        db_info = {"name": os.path.basename(fp), "size_bytes": st.st_size, "sha256": h.hexdigest()[:16]}
+    except OSError:
+        pass
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "model_git_sha": _git_sha(),
+        "config_sha256": cfg_sha,
+        "stake_mode": stake_mode,
+        "db": db_info,
+        "xg_proxy": {
+            "sot": cfg.model.xg_proxy_sot,
+            "off": cfg.model.xg_proxy_off,
+            "big_chance": cfg.model.xg_proxy_big_chance,
+            "live_xg_weight": cfg.model.live_xg_weight,
+        },
+        "note": (
+            "Model probs/Brier/ECE are RECOMPUTED with current code at export. "
+            "config_sha256 + model_git_sha pin which code produced these numbers; "
+            "re-export after a model change moves the headline (see golden-numbers test)."
+        ),
+    }
 
 
 def _final(match_snaps: list[MatchSnapshot]) -> tuple[str, int, int] | None:
@@ -285,14 +368,20 @@ def _read_derived_quotes(db_path: str, match_id: str):
 
 
 async def export_bundles(
-    cfg: AppConfig, db_path: str, out_dir: str, *, match_ids: list[str] | None = None
+    cfg: AppConfig, db_path: str, out_dir: str, *, match_ids: list[str] | None = None,
+    stake_mode: str = "kelly",
 ) -> dict[str, Any]:
     """Run the canonical replay once for golden fills, then write per-match bundles.
+
+    ``stake_mode="fixed"`` sizes every bet equally so the per-match P&L / t-stat are
+    statistically valid (Kelly compounding makes them serially dependent AND injects a
+    look-ahead via the all-matches calibration factor). The CLV headline is
+    stake-independent and unaffected by this choice.
 
     Returns the manifest dict (also written to ``manifest.json``).
     """
     src = Database(db_path if db_path.startswith("sqlite") else f"sqlite:///{db_path}")
-    bt = Backtester(cfg, trade=True, stake_mode="kelly")
+    bt = Backtester(cfg, trade=True, stake_mode=stake_mode)
     result = await bt.run_replay(src, match_ids=match_ids)
     rt = bt.rt
     kelly_factor = float(result.calibration.get("calibration_factor", 1.0))
@@ -326,6 +415,8 @@ async def export_bundles(
                 DixonColesInplayModel(cfg.model), match_snaps, qrows,
                 bundle["home_team"], bundle["away_team"], fs[0], fs[1],
             )
+        cov = _coverage(match_snaps)
+        bundle["coverage"] = cov
         (out / f"{mid}.json").write_text(json.dumps(bundle))
         manifest.append({
             "match_id": mid,
@@ -336,12 +427,27 @@ async def export_bundles(
             "n_ticks": bundle["n_ticks"],
             "n_fills": bundle["golden"]["n_fills"],
             "has_derived": bool(bundle.get("derived")),
+            "first_capture_minute": cov.get("first_capture_minute"),
+            "preoff_is_kickoff": cov.get("preoff_is_kickoff"),
+            "tick_gap_p95_seconds": cov.get("tick_gap_p95_seconds"),
         })
 
+    n_kickoff = sum(1 for m in manifest if m.get("preoff_is_kickoff"))
     manifest_doc = {
         "matches": manifest,
         "aggregate": result.to_dict(),
         "config": _config_block(cfg, cfg.risk.starting_bankroll, kelly_factor),
+        "provenance": _provenance(cfg, db_path, stake_mode),
+        "coverage_summary": {
+            "n_matches": len(manifest),
+            "n_kickoff": n_kickoff,
+            "n_mid_game_start": len(manifest) - n_kickoff,
+            "note": (
+                "preoff CLV for the "
+                f"{len(manifest) - n_kickoff} mid-game-start match(es) references a "
+                "mid-match line, not a true opening line — exclude them for a clean headline."
+            ),
+        },
     }
     (out / "manifest.json").write_text(json.dumps(manifest_doc, indent=2))
     await bt.aclose()
@@ -504,9 +610,12 @@ def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
     live.sort(key=lambda x: x[0], reverse=True)
     bundles = [b for _, b in live]
 
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if bundles:
-        doc: dict[str, Any] = {"live": True, "bundles": bundles, "bundle": bundles[0]}
+        doc: dict[str, Any] = {
+            "live": True, "generated_at": generated_at, "bundles": bundles, "bundle": bundles[0],
+        }
     else:
-        doc = {"live": False, "bundles": []}
+        doc = {"live": False, "generated_at": generated_at, "bundles": []}
     (out / "live.json").write_text(json.dumps(doc))
     return doc

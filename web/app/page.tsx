@@ -28,6 +28,7 @@ export default function Page() {
   const [kellyFraction, setKelly] = useState(0.25);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [liveBundles, setLiveBundles] = useState<Bundle[]>([]);
+  const [liveUpdatedAt, setLiveUpdatedAt] = useState<number | null>(null);
 
   // load data
   useEffect(() => {
@@ -56,7 +57,11 @@ export default function Page() {
   const didAutoLive = useRef(false);
   useEffect(() => {
     let alive = true;
-    const tick = () => loadLive().then((b) => { if (alive) setLiveBundles(b); });
+    const tick = () => loadLive().then(({ bundles: lb, generatedAt }) => {
+      if (!alive) return;
+      setLiveBundles(lb);
+      setLiveUpdatedAt(generatedAt);
+    });
     tick();
     const h = setInterval(tick, 45000);
     return () => { alive = false; clearInterval(h); };
@@ -74,11 +79,13 @@ export default function Page() {
   const setMode = (m: Mode) => { setModeState(m); localStorage.setItem("wck-mode", m); };
   const adv = mode === "advanced";
 
-  // Replay can show the live matches (top of the list) plus all settled games.
-  const replayBundles = useMemo(
-    () => [...liveBundles, ...bundles],
-    [liveBundles, bundles]
-  );
+  // Replay shows live matches (top) plus all settled games — but a match that has just
+  // settled can appear in BOTH the live feed and the settled manifest, so dedup by
+  // match_id with the live copy winning (it carries the in-progress state).
+  const replayBundles = useMemo(() => {
+    const liveIds = new Set(liveBundles.map((b) => b.match_id));
+    return [...liveBundles, ...bundles.filter((b) => !liveIds.has(b.match_id))];
+  }, [liveBundles, bundles]);
   const ids = replayBundles.map((b) => b.match_id);
   const posn = ids.indexOf(selectedId);
   const selected = useMemo(() => replayBundles.find((b) => b.match_id === selectedId), [replayBundles, selectedId]);
@@ -125,7 +132,7 @@ export default function Page() {
         )}
 
         {ready && tab === "bets" && (
-          <Bets bundles={bundles} liveBundles={liveBundles} selectedId={selectedId} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} adv={adv} />
+          <Bets bundles={bundles} liveBundles={liveBundles} liveUpdatedAt={liveUpdatedAt} selectedId={selectedId} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} adv={adv} />
         )}
 
         {ready && tab === "sandbox" && adv && (

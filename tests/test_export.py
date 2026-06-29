@@ -168,4 +168,6 @@ def test_export_live_no_live_match(cfg, tmp_path):
         _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
     ], [])
     doc = export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out"))
-    assert doc == {"live": False, "bundles": []}
+    assert doc["live"] is False
+    assert doc["bundles"] == []
+    assert "generated_at" in doc  # staleness heartbeat for the web's "live feed offline" state
