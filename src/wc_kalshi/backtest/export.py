@@ -433,10 +433,24 @@ async def export_bundles(
             "tick_gap_p95_seconds": cov.get("tick_gap_p95_seconds"),
         })
 
+    # Honest, look-ahead-free edge measurement (fixed stake) ALONGSIDE the interactive
+    # Kelly aggregate. CLV differs by stake mode because sizing decides which sub-1-contract
+    # trades fire; fixed-stake fires every gate-passing signal and yields a valid t-stat, so
+    # it's the CITED headline. The Kelly ``aggregate`` stays the interactive-sim / golden-fill
+    # baseline (what the web engine reproduces). When already fixed, they coincide.
+    if stake_mode != "fixed":
+        bt_fixed = Backtester(cfg, trade=True, stake_mode="fixed")
+        fixed_result = await bt_fixed.run_replay(src, match_ids=match_ids)
+        edge_eval = fixed_result.to_dict()
+        await bt_fixed.aclose()
+    else:
+        edge_eval = result.to_dict()
+
     n_kickoff = sum(1 for m in manifest if m.get("preoff_is_kickoff"))
     manifest_doc = {
         "matches": manifest,
         "aggregate": result.to_dict(),
+        "edge_eval": edge_eval,
         "config": _config_block(cfg, cfg.risk.starting_bankroll, kelly_factor),
         "provenance": _provenance(cfg, db_path, stake_mode),
         "coverage_summary": {

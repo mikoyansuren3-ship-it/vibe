@@ -11,7 +11,10 @@
       ],
       "n_ticks": 215,
       "n_fills": 0,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 45,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 18.1
     },
     {
       "match_id": "1489395",
@@ -24,7 +27,10 @@
       ],
       "n_ticks": 651,
       "n_fills": 15,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.6
     },
     {
       "match_id": "1489396",
@@ -37,7 +43,10 @@
       ],
       "n_ticks": 541,
       "n_fills": 13,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.6
     },
     {
       "match_id": "1489397",
@@ -50,7 +59,10 @@
       ],
       "n_ticks": 439,
       "n_fills": 3,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.8
     },
     {
       "match_id": "1489398",
@@ -63,7 +75,10 @@
       ],
       "n_ticks": 693,
       "n_fills": 12,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.5
     },
     {
       "match_id": "1489399",
@@ -76,7 +91,10 @@
       ],
       "n_ticks": 605,
       "n_fills": 14,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.9
     },
     {
       "match_id": "1489400",
@@ -89,7 +107,10 @@
       ],
       "n_ticks": 667,
       "n_fills": 10,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.6
     },
     {
       "match_id": "1489401",
@@ -102,7 +123,10 @@
       ],
       "n_ticks": 404,
       "n_fills": 8,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 14,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 18.1
     },
     {
       "match_id": "1489402",
@@ -115,7 +139,10 @@
       ],
       "n_ticks": 395,
       "n_fills": 11,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 7,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 18.6
     },
     {
       "match_id": "1489403",
@@ -128,7 +155,10 @@
       ],
       "n_ticks": 604,
       "n_fills": 8,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 17.0
     },
     {
       "match_id": "1489404",
@@ -141,7 +171,10 @@
       ],
       "n_ticks": 13,
       "n_fills": 1,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 30,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 2022.6
     },
     {
       "match_id": "1489407",
@@ -154,7 +187,10 @@
       ],
       "n_ticks": 12,
       "n_fills": 5,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 20,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 2085.5
     },
     {
       "match_id": "1489408",
@@ -167,7 +203,10 @@
       ],
       "n_ticks": 275,
       "n_fills": 7,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 34.9
     },
     {
       "match_id": "1489409",
@@ -180,7 +219,10 @@
       ],
       "n_ticks": 513,
       "n_fills": 2,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 27.9
     },
     {
       "match_id": "1489410",
@@ -193,7 +235,10 @@
       ],
       "n_ticks": 524,
       "n_fills": 16,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 27.9
     },
     {
       "match_id": "1489411",
@@ -206,7 +251,10 @@
       ],
       "n_ticks": 478,
       "n_fills": 6,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 28.3
     },
     {
       "match_id": "1489412",
@@ -219,7 +267,10 @@
       ],
       "n_ticks": 449,
       "n_fills": 2,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 27.9
     },
     {
       "match_id": "1489413",
@@ -232,7 +283,10 @@
       ],
       "n_ticks": 245,
       "n_fills": 6,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 47,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 19.2
     },
     {
       "match_id": "1489414",
@@ -245,7 +299,10 @@
       ],
       "n_ticks": 465,
       "n_fills": 17,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 28.3
     },
     {
       "match_id": "1489415",
@@ -258,7 +315,10 @@
       ],
       "n_ticks": 462,
       "n_fills": 4,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 28.2
     },
     {
       "match_id": "1489416",
@@ -271,7 +331,10 @@
       ],
       "n_ticks": 332,
       "n_fills": 5,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 22.7
     },
     {
       "match_id": "1489417",
@@ -284,7 +347,10 @@
       ],
       "n_ticks": 258,
       "n_fills": 5,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 47,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 27.4
     },
     {
       "match_id": "1489418",
@@ -297,7 +363,10 @@
       ],
       "n_ticks": 468,
       "n_fills": 17,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 28.6
     },
     {
       "match_id": "1489419",
@@ -310,7 +379,10 @@
       ],
       "n_ticks": 459,
       "n_fills": 15,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 29.1
     },
     {
       "match_id": "1489420",
@@ -323,7 +395,10 @@
       ],
       "n_ticks": 480,
       "n_fills": 12,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 23.0
     },
     {
       "match_id": "1489421",
@@ -336,7 +411,10 @@
       ],
       "n_ticks": 452,
       "n_fills": 2,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 28.5
     },
     {
       "match_id": "1489422",
@@ -349,7 +427,10 @@
       ],
       "n_ticks": 446,
       "n_fills": 2,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 23.2
     },
     {
       "match_id": "1539008",
@@ -362,7 +443,10 @@
       ],
       "n_ticks": 629,
       "n_fills": 7,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.9
     },
     {
       "match_id": "1539009",
@@ -375,7 +459,10 @@
       ],
       "n_ticks": 284,
       "n_fills": 6,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 31.5
     },
     {
       "match_id": "1539010",
@@ -388,7 +475,10 @@
       ],
       "n_ticks": 12,
       "n_fills": 3,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 20,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 2086.7
     },
     {
       "match_id": "1539011",
@@ -401,7 +491,10 @@
       ],
       "n_ticks": 480,
       "n_fills": 11,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 27.9
     },
     {
       "match_id": "1539012",
@@ -414,7 +507,10 @@
       ],
       "n_ticks": 514,
       "n_fills": 9,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 28.3
     },
     {
       "match_id": "1539013",
@@ -427,7 +523,10 @@
       ],
       "n_ticks": 469,
       "n_fills": 13,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 29.3
     },
     {
       "match_id": "1539017",
@@ -440,7 +539,10 @@
       ],
       "n_ticks": 315,
       "n_fills": 3,
-      "has_derived": false
+      "has_derived": false,
+      "first_capture_minute": 3,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 18.1
     },
     {
       "match_id": "1539074",
@@ -453,7 +555,10 @@
       ],
       "n_ticks": 344,
       "n_fills": 2,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 22.9
     },
     {
       "match_id": "1561329",
@@ -466,13 +571,17 @@
       ],
       "n_ticks": 466,
       "n_fills": 10,
-      "has_derived": true
+      "has_derived": true,
+      "first_capture_minute": 4,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 21.7
     }
   ],
   "aggregate": {
     "n_matches": 36,
     "n_fills": 282,
     "stake_mode": "kelly",
+    "data_source": "kalshi_replay",
     "realized_pnl": -1.39,
     "fees_paid": 0.0,
     "gross_pnl": -1.39,
@@ -488,6 +597,20 @@
     "clv_n_preoff": 282,
     "avg_clv_5m": -0.0018,
     "clv_n_5m": 257,
+    "clv_ci_preoff": [
+      -0.1087,
+      -0.0548
+    ],
+    "clv_ci_5m": [
+      -0.0184,
+      0.0134
+    ],
+    "clv_ci_close": [
+      -0.0832,
+      0.1613
+    ],
+    "n_clusters_preoff": 35,
+    "edge_verdict": "negative",
     "starting_bankroll": 100.0,
     "ending_equity": 98.61,
     "calibration": {
@@ -496,12 +619,97 @@
       "log_loss": 0.7278,
       "ece": 0.0317,
       "calibration_factor": 0.8415
+    },
+    "calibration_per_outcome": {
+      "home": {
+        "mean_predicted": 0.3802,
+        "empirical_freq": 0.3815,
+        "bias": -0.0014,
+        "ece": 0.0785
+      },
+      "draw": {
+        "mean_predicted": 0.3126,
+        "empirical_freq": 0.3293,
+        "bias": -0.0167,
+        "ece": 0.0826
+      },
+      "away": {
+        "mean_predicted": 0.3072,
+        "empirical_freq": 0.2892,
+        "bias": 0.0181,
+        "ece": 0.0591
+      }
+    }
+  },
+  "edge_eval": {
+    "n_matches": 36,
+    "n_fills": 302,
+    "stake_mode": "fixed",
+    "data_source": "kalshi_replay",
+    "realized_pnl": -52.29,
+    "fees_paid": 0.0,
+    "gross_pnl": -52.29,
+    "roi": -0.5229,
+    "t_stat": -0.84,
+    "pnl_ci": [
+      -4.56,
+      1.986
+    ],
+    "avg_clv": 0.0011,
+    "clv_n": 302,
+    "avg_clv_preoff": -0.041,
+    "clv_n_preoff": 302,
+    "avg_clv_5m": -0.0095,
+    "clv_n_5m": 282,
+    "clv_ci_preoff": [
+      -0.0691,
+      -0.0127
+    ],
+    "clv_ci_5m": [
+      -0.0258,
+      0.0056
+    ],
+    "clv_ci_close": [
+      -0.1287,
+      0.1342
+    ],
+    "n_clusters_preoff": 35,
+    "edge_verdict": "negative",
+    "starting_bankroll": 100.0,
+    "ending_equity": 47.71,
+    "calibration": {
+      "n": 518.0,
+      "brier": 0.459,
+      "log_loss": 0.9702,
+      "ece": 0.0291,
+      "calibration_factor": 0.8543
+    },
+    "calibration_per_outcome": {
+      "home": {
+        "mean_predicted": 0.3658,
+        "empirical_freq": 0.3687,
+        "bias": -0.003,
+        "ece": 0.0694
+      },
+      "draw": {
+        "mean_predicted": 0.3138,
+        "empirical_freq": 0.3069,
+        "bias": 0.0069,
+        "ece": 0.0726
+      },
+      "away": {
+        "mean_predicted": 0.3204,
+        "empirical_freq": 0.3243,
+        "bias": -0.0039,
+        "ece": 0.0588
+      }
     }
   },
   "config": {
     "min_edge": 0.05,
     "min_edge_after_costs": 0.03,
     "slippage_cents": 1,
+    "market_pool_weight": 1.0,
     "fee_coefficient": 0.0,
     "maker_fraction": 0.25,
     "min_price": 0.03,
@@ -515,5 +723,29 @@
     "late_taper_floor": 0.34,
     "bankroll": 100.0,
     "kelly_factor": 0.8415
+  },
+  "provenance": {
+    "generated_at": "2026-06-29T18:24:19+00:00",
+    "model_git_sha": "9e63dae",
+    "config_sha256": "5e8e763a989c7154",
+    "stake_mode": "kelly",
+    "db": {
+      "name": "wc_tournament.sqlite3",
+      "size_bytes": 891506688,
+      "sha256": "debe3a90970a2119"
+    },
+    "xg_proxy": {
+      "sot": 0.1865,
+      "off": 0.0665,
+      "big_chance": 0.0,
+      "live_xg_weight": 0.3
+    },
+    "note": "Model probs/Brier/ECE are RECOMPUTED with current code at export. config_sha256 + model_git_sha pin which code produced these numbers; re-export after a model change moves the headline (see golden-numbers test)."
+  },
+  "coverage_summary": {
+    "n_matches": 36,
+    "n_kickoff": 26,
+    "n_mid_game_start": 10,
+    "note": "preoff CLV for the 10 mid-game-start match(es) references a mid-match line, not a true opening line \u2014 exclude them for a clean headline."
   }
 }
