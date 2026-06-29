@@ -14,11 +14,57 @@ export interface ManifestEntry {
   n_fills: number;
   has_derived?: boolean;
   live?: boolean;
+  preoff_is_kickoff?: boolean;
+  first_capture_minute?: number;
+}
+
+export interface OutcomeCalibration {
+  mean_predicted: number;
+  empirical_freq: number;
+  bias: number;
+  ece: number;
+}
+
+/** The aggregate metrics block (manifest.aggregate = kelly; manifest.edge_eval = fixed). */
+export interface Aggregate {
+  n_matches: number;
+  n_fills: number;
+  stake_mode: string;
+  avg_clv_preoff: number;
+  avg_clv_5m: number;
+  avg_clv: number;
+  clv_ci_preoff: [number, number];
+  n_clusters_preoff: number;
+  edge_verdict: "negative" | "positive" | "indistinguishable_from_zero" | string;
+  realized_pnl: number;
+  roi: number;
+  t_stat: number;
+  pnl_ci: [number, number];
+  calibration: { n: number; brier: number; log_loss: number; ece: number; calibration_factor: number };
+  calibration_per_outcome?: Record<string, OutcomeCalibration>;
+}
+
+export interface CoverageSummary {
+  n_matches: number;
+  n_kickoff: number;
+  n_mid_game_start: number;
+  note?: string;
+}
+
+export interface Provenance {
+  generated_at: string;
+  model_git_sha: string | null;
+  config_sha256: string;
+  stake_mode: string;
+  db?: { name?: string; size_bytes?: number; sha256?: string };
 }
 
 export interface Manifest {
   matches: ManifestEntry[];
   aggregate: Record<string, unknown>;
+  edge_eval?: Record<string, unknown>;
+  coverage_summary?: CoverageSummary;
+  provenance?: Provenance;
   config: Record<string, unknown>;
   live_match_id?: string | null;
 }

@@ -7,6 +7,7 @@ import { Sandbox } from "../components/Sandbox";
 import { Overview } from "../components/tabs/Overview";
 import { Bets } from "../components/tabs/Bets";
 import { Markets } from "../components/tabs/Markets";
+import { Calibration } from "../components/tabs/Calibration";
 import { Games } from "../components/tabs/Games";
 import { About } from "../components/tabs/About";
 import { runMany } from "../lib/sim/engine";
@@ -14,7 +15,7 @@ import { loadAllBundles, loadLive, loadManifest, type Manifest } from "../lib/da
 import type { Bundle, Filters } from "../lib/sim/types";
 
 const NO_FILTERS: Filters = { sellOnly: false, disableBuys: false, maxEntryMinute: null };
-const TABS: TabId[] = ["overview", "replay", "bets", "markets", "sandbox", "games", "about"];
+const TABS: TabId[] = ["overview", "replay", "bets", "markets", "calibration", "sandbox", "games", "about"];
 
 export default function Page() {
   const [manifest, setManifest] = useState<Manifest | null>(null);
@@ -51,7 +52,7 @@ export default function Page() {
     if (TABS.includes(h)) setTab(h);
   }, []);
   useEffect(() => { if (typeof location !== "undefined") history.replaceState(null, "", `#${tab}`); }, [tab]);
-  useEffect(() => { if (mode === "basic" && tab === "sandbox") setTab("overview"); }, [mode, tab]);
+  useEffect(() => { if (mode === "basic" && (tab === "sandbox" || tab === "calibration")) setTab("overview"); }, [mode, tab]);
 
   // Near-live: poll all in-progress matches from Vercel Blob (~1 min lag by design).
   const didAutoLive = useRef(false);
@@ -143,6 +144,7 @@ export default function Page() {
         )}
 
         {ready && tab === "markets" && <Markets bundles={bundles} adv={adv} />}
+        {ready && tab === "calibration" && adv && <Calibration manifest={manifest!} />}
         {ready && tab === "games" && <Games bundles={bundles} adv={adv} onPick={(id) => pick(id, "replay")} />}
         {ready && tab === "about" && <About />}
       </main>
