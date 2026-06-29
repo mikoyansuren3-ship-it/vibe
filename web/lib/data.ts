@@ -40,9 +40,13 @@ export async function loadAllBundles(ids: string[]): Promise<Bundle[]> {
   return Promise.all(ids.map((id) => loadBundle(id)));
 }
 
-// Public Vercel Blob store the recorder-host publisher writes the live match into.
-const BLOB_BASE =
-  process.env.NEXT_PUBLIC_BLOB_BASE || "https://tgk7qzxearwylitn.public.blob.vercel-storage.com";
+// Public store the recorder-host publisher writes the live match into. Migrated from
+// Vercel Blob (suspended) to a public Supabase Storage bucket; `{base}/live.json` is the
+// public object URL (CORS *, short cache-control). Override via env if the store moves.
+const LIVE_FEED_BASE =
+  process.env.NEXT_PUBLIC_LIVE_BASE ||
+  process.env.NEXT_PUBLIC_BLOB_BASE || // legacy name, still honored
+  "https://rgtzktwqpktvbeimrfow.supabase.co/storage/v1/object/public/live";
 
 export interface LiveResult {
   bundles: Bundle[];
@@ -57,7 +61,7 @@ export interface LiveResult {
  * `bundle` field for older live.json payloads. */
 export async function loadLive(): Promise<LiveResult> {
   try {
-    const r = await fetch(`${BLOB_BASE}/live.json?t=${Date.now()}`, { cache: "no-store" });
+    const r = await fetch(`${LIVE_FEED_BASE}/live.json?t=${Date.now()}`, { cache: "no-store" });
     if (!r.ok) return { bundles: [], generatedAt: null };
     const doc = await r.json();
     const generatedAt = doc?.generated_at ? Date.parse(doc.generated_at) || null : null;
