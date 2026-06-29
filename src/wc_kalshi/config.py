@@ -17,6 +17,7 @@ trade real money.
 from __future__ import annotations
 
 import enum
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+log = logging.getLogger("wck.config")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = REPO_ROOT / "config" / "default.yaml"
@@ -96,11 +99,6 @@ class FootballSection(BaseModel):
     # 1 = market fully prices live xG. Used to stress-test that our edge shrinks as
     # the counterparty gets sharper (de-circularises the synthetic backtest).
     sim_market_xg_awareness: float = 0.0
-
-
-class ConsensusSection(BaseModel):
-    polymarket_enabled: bool = False
-    polymarket_gamma_base: str = "https://gamma-api.polymarket.com"
 
 
 class ModelSection(BaseModel):
@@ -234,7 +232,6 @@ class AppConfig(BaseModel):
     app: AppSection
     kalshi: KalshiSection
     football: FootballSection
-    consensus: ConsensusSection
     model: ModelSection
     edge: EdgeSection
     risk: RiskSection
@@ -356,12 +353,19 @@ def load_config(
         load_dotenv(REPO_ROOT / ".env")
 
     merged = _load_yaml(DEFAULT_CONFIG)
+    layers = ["config/default.yaml"]
+    local_missing = False
     if use_local:
-        merged = _deep_merge(merged, _load_yaml(LOCAL_CONFIG))
+        if LOCAL_CONFIG.exists():
+            merged = _deep_merge(merged, _load_yaml(LOCAL_CONFIG))
+            layers.append("config/local.yaml")
+        else:
+            local_missing = True
 
     explicit = config_path or os.getenv("WCK_CONFIG")
     if explicit:
         merged = _deep_merge(merged, _load_yaml(Path(explicit)))
+        layers.append(str(explicit))
 
     secrets = _load_secrets()
 
@@ -377,7 +381,28 @@ def load_config(
     config = AppConfig.model_validate(merged)
 
     _enforce_safety(config)
+    _log_provenance(config, layers, local_missing=local_missing)
     return config
+
+
+def _log_provenance(config: AppConfig, layers: list[str], *, local_missing: bool) -> None:
+    """Make the config that's actually in effect visible every run — never silent.
+
+    The operationally-critical knobs (``fee_coefficient``, ``capture_extra_markets``) live
+    only in git-ignored ``config/local.yaml``, so a real-data run without it silently
+    reverts to a phantom 0.07 fee + 1X2-only capture. Log the resolved values, loudly."""
+    log.info(
+        "config: layers=%s mode=%s provider=%s fee=%s capture_extra=%s",
+        "+".join(layers), config.mode.value, config.football.provider,
+        config.kalshi.fee_coefficient, config.kalshi.capture_extra_markets,
+    )
+    if local_missing and config.football.provider == "apifootball":
+        log.warning(
+            "config/local.yaml MISSING but provider=apifootball — fee_coefficient=%s and "
+            "capture_extra_markets=%s fell back to defaults; the recorder overrides are NOT "
+            "applied. Create config/local.yaml (or pass --config) before recording.",
+            config.kalshi.fee_coefficient, config.kalshi.capture_extra_markets,
+        )
 
 
 def _enforce_safety(config: AppConfig) -> None:

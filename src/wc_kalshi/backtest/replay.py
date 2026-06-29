@@ -54,6 +54,47 @@ def bootstrap_ci(
     return (lo, hi)
 
 
+def clustered_clv_ci(
+    by_match: dict[str, list[float]], *, iters: int = 5000, alpha: float = 0.05, seed: int = 0
+) -> tuple[float, float, int]:
+    """Match-CLUSTERED percentile-bootstrap CI for the pooled mean CLV.
+
+    Fills within one match share an outcome, an opening line, and one model
+    trajectory, so they are NOT independent — the naive fill-level interval
+    overstates precision by the design effect (1 + (m̄−1)·ρ). This resamples whole
+    MATCHES with replacement and re-pools their fills each draw, so the interval is
+    honest about the real (cluster) sample size. The centre matches the published
+    fill-pooled mean. Returns ``(lo, hi, n_clusters)``.
+    """
+    matches = [m for m, v in by_match.items() if v]
+    n = len(matches)
+    if n < 2:
+        return (0.0, 0.0, n)
+    rng = random.Random(seed)
+    means: list[float] = []
+    for _ in range(iters):
+        total = 0.0
+        count = 0
+        for _ in range(n):
+            vals = by_match[matches[rng.randrange(n)]]
+            total += sum(vals)
+            count += len(vals)
+        means.append(total / count if count else 0.0)
+    means.sort()
+    lo = means[int((alpha / 2) * iters)]
+    hi = means[min(iters - 1, int((1 - alpha / 2) * iters))]
+    return (lo, hi, n)
+
+
+def edge_verdict(ci: tuple[float, float]) -> str:
+    """Headline verdict from a CLV interval. The honest default when the interval
+    brackets zero is "no demonstrated edge" — never "is −EV" or "has edge"."""
+    lo, hi = ci
+    if lo <= 0.0 <= hi:
+        return "indistinguishable_from_zero"
+    return "negative" if hi < 0.0 else "positive"
+
+
 @dataclass
 class BacktestResult:
     n_matches: int = 0
@@ -77,6 +118,14 @@ class BacktestResult:
     avg_clv_5m: float = 0.0
     clv_n_5m: int = 0
     pnl_ci: tuple[float, float] = (0.0, 0.0)  # bootstrap CI for mean per-match P&L
+    # MATCH-CLUSTERED 95% CIs for mean CLV (resample matches, re-pool fills). The
+    # primary honesty number: the fill-level mean has no valid CI because fills within
+    # a match are correlated. ``edge_verdict`` is read off ``clv_ci_preoff``.
+    clv_ci_preoff: tuple[float, float] = (0.0, 0.0)
+    clv_ci_5m: tuple[float, float] = (0.0, 0.0)
+    clv_ci_close: tuple[float, float] = (0.0, 0.0)
+    n_clusters_preoff: int = 0  # matches contributing a pre-off fill (the real sample size)
+    edge_verdict: str = "indistinguishable_from_zero"
 
     @property
     def gross_pnl(self) -> float:
@@ -114,6 +163,11 @@ class BacktestResult:
             "clv_n_preoff": self.clv_n_preoff,
             "avg_clv_5m": round(self.avg_clv_5m, 4),
             "clv_n_5m": self.clv_n_5m,
+            "clv_ci_preoff": [round(self.clv_ci_preoff[0], 4), round(self.clv_ci_preoff[1], 4)],
+            "clv_ci_5m": [round(self.clv_ci_5m[0], 4), round(self.clv_ci_5m[1], 4)],
+            "clv_ci_close": [round(self.clv_ci_close[0], 4), round(self.clv_ci_close[1], 4)],
+            "n_clusters_preoff": self.n_clusters_preoff,
+            "edge_verdict": self.edge_verdict,
             "starting_bankroll": self.starting_bankroll,
             "ending_equity": round(self.ending_equity, 2),
             "calibration": {k: round(v, 4) for k, v in self.calibration.items()},
@@ -141,6 +195,10 @@ class BacktestResult:
             f"  vs pre-off line:    {self.avg_clv_preoff:+.4f}  over {self.clv_n_preoff} fills  (PRIMARY exchange edge)",
             f"  vs +5min line:      {self.avg_clv_5m:+.4f}  over {self.clv_n_5m} fills  (in-play drift)",
             f"  vs last tick:       {self.avg_clv:+.4f}  over {self.clv_n} fills  (WARNING: degenerate near FT)",
+            "-" * 60,
+            f"  pre-off CLV 95% CI: [{self.clv_ci_preoff[0]:+.4f}, {self.clv_ci_preoff[1]:+.4f}]  "
+            f"(MATCH-CLUSTERED, n={self.n_clusters_preoff} matches — the honest sample size)",
+            f"  edge verdict:       {self.edge_verdict.replace('_', ' ').upper()}",
             "-" * 60,
             "  CALIBRATION",
             f"  Brier:    {c.get('brier', float('nan')):.4f}  (uniform 1X2 ~= 0.667)",
@@ -199,6 +257,9 @@ class Backtester:
     def _collect(self, per_match_pnl: list[float], equity_curve: list[float]) -> BacktestResult:
         rt = self.rt
         clv = self._compute_clv()
+        ci_preoff = clustered_clv_ci(clv["preoff"][2])
+        ci_5m = clustered_clv_ci(clv["5m"][2], seed=1)
+        ci_close = clustered_clv_ci(clv["close"][2], seed=2)
         return BacktestResult(
             n_matches=len(per_match_pnl),
             n_fills=0,  # set by caller
@@ -218,6 +279,11 @@ class Backtester:
             avg_clv_5m=clv["5m"][0],
             clv_n_5m=clv["5m"][1],
             pnl_ci=bootstrap_ci(per_match_pnl),
+            clv_ci_preoff=(ci_preoff[0], ci_preoff[1]),
+            clv_ci_5m=(ci_5m[0], ci_5m[1]),
+            clv_ci_close=(ci_close[0], ci_close[1]),
+            n_clusters_preoff=ci_preoff[2],
+            edge_verdict=edge_verdict((ci_preoff[0], ci_preoff[1])),
         )
 
     @staticmethod
@@ -241,7 +307,7 @@ class Backtester:
         minute, mid = min(hist, key=lambda mm: abs(mm[0] - at))
         return mid if abs(minute - at) <= tol else None
 
-    def _compute_clv(self) -> dict[str, tuple[float, int]]:
+    def _compute_clv(self) -> dict[str, tuple[float, int, dict[str, list[float]]]]:
         """CLV per contract against three reference lines (probability units).
 
         * ``close``  — vs the LAST observed mid (``rt.last_mids``). Degenerate near full
@@ -249,23 +315,35 @@ class Backtester:
         * ``preoff`` — vs the earliest captured quote (the pre-off / opening line). The
           primary, non-degenerate signal of whether the entry beat a real market price.
         * ``5m``     — vs the quote ~5 match-minutes after entry (in-play drift capture).
+
+        Each value is ``(pooled_mean, n_fills, by_match)`` where ``by_match`` maps a
+        match_id to its list of per-fill CLVs — the grouping the clustered CI needs.
         """
         rt = self.rt
         buckets: dict[str, list[float]] = {"close": [], "preoff": [], "5m": []}
+        by_match: dict[str, dict[str, list[float]]] = {"close": {}, "preoff": {}, "5m": {}}
         for f in rt.fills_log:
             ticker, action = f["market_ticker"], f["action"]
+            mid_key = f.get("match_id") or ticker
             entry = f["entry_price_cents"] / 100.0
             close_mid = rt.last_mids.get(ticker)
             if close_mid is not None:
-                buckets["close"].append(self._signed_clv(action, entry, close_mid))
+                v = self._signed_clv(action, entry, close_mid)
+                buckets["close"].append(v)
+                by_match["close"].setdefault(mid_key, []).append(v)
             pre = self._reference_mid(ticker, at=None)
             if pre is not None:
-                buckets["preoff"].append(self._signed_clv(action, entry, pre))
+                v = self._signed_clv(action, entry, pre)
+                buckets["preoff"].append(v)
+                by_match["preoff"].setdefault(mid_key, []).append(v)
             ref5 = self._reference_mid(ticker, at=int(f.get("minute", 0)) + 5)
             if ref5 is not None:
-                buckets["5m"].append(self._signed_clv(action, entry, ref5))
+                v = self._signed_clv(action, entry, ref5)
+                buckets["5m"].append(v)
+                by_match["5m"].setdefault(mid_key, []).append(v)
         return {
-            k: ((sum(v) / len(v), len(v)) if v else (0.0, 0)) for k, v in buckets.items()
+            k: ((sum(buckets[k]) / len(buckets[k]) if buckets[k] else 0.0), len(buckets[k]), by_match[k])
+            for k in buckets
         }
 
     async def run_synthetic(

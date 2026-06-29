@@ -192,11 +192,16 @@ async def _cmd_export(args) -> int:
             print(f"no live match → wrote {args.out}/live.json (live:false)")
         return 0
     ids = [args.match_id] if getattr(args, "match_id", None) else None
-    manifest = await export_bundles(cfg, args.db, args.out, match_ids=ids)
+    manifest = await export_bundles(
+        cfg, args.db, args.out, match_ids=ids, stake_mode=getattr(args, "stake_mode", "kelly")
+    )
+    agg = manifest["aggregate"]
+    ci = agg.get("clv_ci_preoff", [0, 0])
     print(
         f"exported {len(manifest['matches'])} bundles to {args.out} "
-        f"(aggregate: {manifest['aggregate']['n_fills']} fills, "
-        f"CLV preoff {manifest['aggregate']['avg_clv_preoff']})"
+        f"(aggregate: {agg['n_fills']} fills, CLV preoff {agg['avg_clv_preoff']:+.4f} "
+        f"95% CI [{ci[0]:+.4f}, {ci[1]:+.4f}] over {agg.get('n_clusters_preoff', 0)} matches "
+        f"→ {agg.get('edge_verdict', 'n/a').replace('_', ' ')})"
     )
     return 0
 
@@ -378,13 +383,22 @@ def _cmd_doctor(args) -> int:
     except ConfigError as exc:
         print(f"CONFIG ERROR: {exc}")
         return 1
+    from .config import LOCAL_CONFIG
+
     creds = cfg.secrets.has_kalshi_creds()
+    local_present = LOCAL_CONFIG.exists()
     print("wck doctor")
     print(f"  mode:              {cfg.mode.value}")
+    print(f"  config/local.yaml: {'present' if local_present else 'MISSING'}")
     print(f"  kalshi rest base:  {cfg.kalshi_rest_base}")
     print(f"  football provider: {cfg.football.provider}")
+    print(f"  fee_coefficient:   {cfg.kalshi.fee_coefficient}")
+    print(f"  capture_extra:     {cfg.kalshi.capture_extra_markets}")
     print(f"  db:                {cfg.resolved_db_url()}")
     print(f"  kalshi creds set:  {creds}")
+    if not local_present and cfg.football.provider == "apifootball":
+        print("  WARNING: provider=apifootball without config/local.yaml — fee + extra-market "
+              "capture fell back to defaults (phantom 0.07 fee, 1X2-only capture).")
     print(f"  apifootball key:   {bool(cfg.secrets.apifootball_key)}")
     print(f"  kelly fraction:    {cfg.risk.kelly_fraction}")
     print(f"  edge thresholds:   min={cfg.edge.min_edge} after_costs={cfg.edge.min_edge_after_costs}")
@@ -437,6 +451,10 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--out", default="web/public/bundles", help="output dir for bundles + manifest")
     ex.add_argument("--match-id", default=None, help="export a single match (e.g. for live)")
     ex.add_argument("--bankroll", type=float, default=None, help="starting fake bankroll $ (default cfg)")
+    ex.add_argument(
+        "--stake-mode", choices=["kelly", "fixed"], default="kelly",
+        help="fixed = equal stake per bet → look-ahead-free, statistically valid P&L/CI",
+    )
     ex.add_argument("--live", action="store_true", help="write live.json for all in-progress matches only")
 
     h = sub.add_parser("historical", help="backtest against REAL xG + market data (JSON)")
