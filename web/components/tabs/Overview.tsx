@@ -6,7 +6,7 @@ import { cls, money, signed } from "../bits";
 import { runMany } from "../../lib/sim/engine";
 import { OUT_HEX } from "../../lib/format";
 import type { Bundle } from "../../lib/sim/types";
-import type { Manifest } from "../../lib/data";
+import type { Aggregate, Manifest } from "../../lib/data";
 
 export function Overview({
   manifest, bundles, adv, onPick,
@@ -17,11 +17,15 @@ export function Overview({
   const base = useMemo(() => runMany(bundles), [bundles]);
   const brier = (manifest.aggregate as { calibration?: Record<string, number> }).calibration?.brier ?? 0;
   const rec = manifest.matches.reduce((a, x) => { a[x.outcome]++; return a; }, { H: 0, D: 0, A: 0 } as Record<string, number>);
+  // Headline edge = the look-ahead-free fixed-stake measurement (manifest.edge_eval), not
+  // the bankroll-sensitive Kelly sim P&L. Falls back to the Kelly aggregate if absent.
+  const edge = (manifest.edge_eval as unknown as Aggregate | undefined) ?? (manifest.aggregate as unknown as Aggregate);
+  const edgeNeg = edge.edge_verdict === "negative";
 
   const cells = [
     { k: "Games", v: String(manifest.matches.length), sub: `${base.nFills} paper bets`, show: true },
     { k: "Paper P&L", v: money(base.pnl), c: cls(base.pnl), sub: "$100 / game, summed", show: true },
-    { k: "Pre-off CLV", v: signed(base.clvPreoff ?? 0, 4), c: cls(base.clvPreoff ?? 0), sub: "vs opening line", show: adv },
+    { k: "Edge · pre-off CLV", v: signed(edge.avg_clv_preoff, 3), c: edgeNeg ? "neg" : "flat", sub: "fixed-stake · vs opening line", show: adv },
     { k: "Brier", v: brier.toFixed(4), sub: "calibration · lower better", show: adv },
     { k: "Results", v: `${rec.H}–${rec.D}–${rec.A}`, sub: "home–draw–away", show: true },
   ].filter((c) => c.show);
@@ -51,7 +55,7 @@ export function Overview({
           The bot watched {manifest.matches.length} matches and placed {base.nFills} fake-money bets ($100 per game).
           It reads each game well — but it does <span style={{ color: "var(--text)", fontWeight: 600 }}>not beat the market</span>.
           {adv
-            ? ` Its bets enter ~${signed(base.clvPreoff ?? 0, 3)} vs the opening line (negative = paying up), and its calibration (Brier ${brier.toFixed(3)}) is solid. A well-calibrated model with no demonstrated edge.`
+            ? ` Its fixed-stake entries give ${signed(edge.avg_clv_preoff, 3)} CLV vs the opening line (95% CI [${signed(edge.clv_ci_preoff[0], 3)}, ${signed(edge.clv_ci_preoff[1], 3)}] — ${edgeNeg ? "a small but statistically negative edge" : "indistinguishable from zero"}), while staying well-calibrated (Brier ${brier.toFixed(3)}). See the Calibration tab for the full breakdown.`
             : " Think of it as a lab to watch and learn from — not a tipster to follow."}
         </p>
       </div>
