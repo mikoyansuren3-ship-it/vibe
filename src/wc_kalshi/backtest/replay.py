@@ -133,6 +133,7 @@ class BacktestResult:
     equity_curve: list[float] = field(default_factory=list)
     calibration: dict[str, float] = field(default_factory=dict)
     reliability: list[dict[str, float]] = field(default_factory=list)
+    per_outcome_calibration: dict[str, dict[str, float]] = field(default_factory=dict)
     stake_mode: str = "kelly"  # "kelly" (compounding) | "fixed" (constant stake)
     data_source: str = "unknown"  # one of DataSource.* — the namespace this metric lives in
     avg_clv: float = 0.0  # mean closing-line value per contract (probability units)
@@ -199,6 +200,10 @@ class BacktestResult:
             "starting_bankroll": self.starting_bankroll,
             "ending_equity": round(self.ending_equity, 2),
             "calibration": {k: round(v, 4) for k, v in self.calibration.items()},
+            "calibration_per_outcome": {
+                o: {k: round(v, 4) for k, v in m.items()}
+                for o, m in self.per_outcome_calibration.items()
+            },
         }
 
     def report(self) -> str:
@@ -300,6 +305,7 @@ class Backtester:
             equity_curve=equity_curve,
             calibration=rt.calibration.metrics(),
             reliability=rt.calibration.reliability_table(),
+            per_outcome_calibration=rt.calibration.per_outcome_metrics(),
             stake_mode=self.stake_mode,
             avg_clv=clv["close"][0],
             clv_n=clv["close"][1],

@@ -206,6 +206,7 @@ def _config_block(cfg: AppConfig, bankroll: float, kelly_factor: float) -> dict[
         "min_edge": cfg.edge.min_edge,
         "min_edge_after_costs": cfg.edge.min_edge_after_costs,
         "slippage_cents": cfg.edge.slippage_cents,
+        "market_pool_weight": cfg.edge.market_pool_weight,
         "fee_coefficient": cfg.kalshi.fee_coefficient,
         "maker_fraction": cfg.kalshi.maker_fee_fraction,
         "min_price": cfg.risk.min_price,

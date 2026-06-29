@@ -31,6 +31,15 @@ export function devigProportional(mids: number[]): number[] {
   return total > 0 ? mids.map((m) => m / total) : mids;
 }
 
+/** Log-opinion pool of model probs with the de-vigged market (detector.market_pooled).
+ * p ∝ p_model**w · p_market**(1-w). w=1 -> model unchanged; only pools the full 1X2 book. */
+export function marketPooled(modelProbs: number[], implied: number[], w: number): number[] {
+  if (w >= 1 || modelProbs.length < 3 || implied.length !== modelProbs.length) return modelProbs;
+  const pooled = modelProbs.map((pm, i) => Math.pow(Math.max(pm, 1e-9), w) * Math.pow(Math.max(implied[i], 1e-9), 1 - w));
+  const z = pooled.reduce((a, b) => a + b, 0);
+  return z > 0 ? pooled.map((x) => x / z) : modelProbs;
+}
+
 export interface EdgeSig {
   outcome: OutcomeKey;
   modelP: number;
@@ -53,9 +62,11 @@ export function evaluateTick(tick: Tick, cfg: SimConfig): EdgeSig[] {
     return (b + a) / 200;
   });
   const implied = devigProportional(mids);
+  // Shrink the model toward the de-vigged market before judging edges (no-op at w=1).
+  const modelEff = marketPooled(present.map((o) => tick.model[MODEL_IDX[o]]), implied, cfg.market_pool_weight ?? 1);
 
   return present.map((o, i) => {
-    const modelP = tick.model[MODEL_IDX[o]];
+    const modelP = modelEff[i];
     const imp = implied[i];
     const [bidC, askC] = tick.markets[o] as [number, number];
     const ask = askC / 100;

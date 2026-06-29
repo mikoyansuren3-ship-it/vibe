@@ -43,6 +43,7 @@ export interface SimConfig {
   late_taper_floor: number;
   bankroll: number;
   kelly_factor: number;
+  market_pool_weight?: number; // log-opinion pool weight on the model (1 = pure model)
 }
 
 export interface Bundle {

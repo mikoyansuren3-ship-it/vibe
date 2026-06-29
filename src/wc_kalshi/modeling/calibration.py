@@ -91,6 +91,41 @@ class CalibrationTracker:
             for row in table
         )
 
+    @staticmethod
+    def _binned_ece(preds: np.ndarray, obs: np.ndarray, bins: int) -> float:
+        if preds.size == 0:
+            return float("nan")
+        edges = np.linspace(0.0, 1.0, bins + 1)
+        total = preds.size
+        acc = 0.0
+        for i in range(bins):
+            lo, hi = edges[i], edges[i + 1]
+            mask = (preds >= lo) & (preds < hi if i < bins - 1 else preds <= hi)
+            c = int(mask.sum())
+            if c:
+                acc += c / total * abs(preds[mask].mean() - obs[mask].mean())
+        return acc
+
+    def per_outcome_metrics(self, bins: int = 10) -> dict[str, dict[str, float]]:
+        """Per-CLASS calibration (home / draw / away). The pooled ECE averages the three
+        binary problems together, so a systematic +home / −draw bias can cancel to ≈0 even
+        when each class is mis-calibrated. This exposes each class's mean predicted vs
+        empirical, its signed bias, and its own ECE. DIAGNOSTIC ONLY — deliberately not fed
+        into sizing on these small per-class samples."""
+        if self.n == 0:
+            return {}
+        p, y = self._arrays()
+        out: dict[str, dict[str, float]] = {}
+        for i, o in enumerate(_OUTCOME_ORDER):
+            preds, obs = p[:, i], y[:, i]
+            out[o.value] = {
+                "mean_predicted": float(preds.mean()),
+                "empirical_freq": float(obs.mean()),
+                "bias": float(preds.mean() - obs.mean()),
+                "ece": self._binned_ece(preds, obs, bins),
+            }
+        return out
+
     def calibration_factor(self) -> float:
         """Kelly multiplier in [ece_floor, 1.0]. Conservative until proven calibrated."""
         if self.n < self.min_samples:
