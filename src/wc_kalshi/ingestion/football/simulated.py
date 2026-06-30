@@ -13,8 +13,10 @@ The same ``SimMatch`` engine powers both the live provider (incremental) and the
 from __future__ import annotations
 
 import random
+from datetime import timedelta
 
 from ...models.schemas import MatchContext, MatchPeriod, MatchSnapshot, TeamStats
+from ...util import utcnow
 from .base import FootballDataProvider
 
 # Illustrative pre-match priors (World Football Elo-ish, FIFA rank, squad value €m).
@@ -228,8 +230,11 @@ class SimulatedFootballProvider(FootballDataProvider):
         num_matches: int = 3,
         minutes_per_tick: float = 1.0,
     ) -> None:
+        self.seed = seed
+        self.minutes_per_tick = minutes_per_tick
+        self.num_matches = max(1, min(num_matches, len(FIXTURES)))
         self.rng = random.Random(seed)
-        fixtures = FIXTURES[: max(1, min(num_matches, len(FIXTURES)))]
+        fixtures = FIXTURES[: self.num_matches]
         self.matches: list[SimMatch] = [
             SimMatch(
                 match_id=f"sim-{i+1}",
@@ -250,6 +255,29 @@ class SimulatedFootballProvider(FootballDataProvider):
             # Emit while live, plus the single final snapshot on the tick it ends.
             if m.period.is_live or (m.finished and not was_finished):
                 out.append(m.snapshot())
+        return out
+
+    async def fetch_upcoming(self, limit: int = 8) -> list[MatchSnapshot]:
+        """PRE-period projections for fixtures NOT in the live window, each with a
+        synthetic staggered kickoff (the offline simulator has no real schedule).
+
+        Built fresh and never advanced, so every snapshot stays in ``MatchPeriod.PRE``
+        (``status="scheduled"``) — the model degenerates to its Elo-only prior. Ids are
+        ``sim-up-*`` so they never collide with the ``sim-*`` live/recorded matches."""
+        pending = FIXTURES[self.num_matches:] or FIXTURES
+        base = utcnow() + timedelta(hours=6)
+        out: list[MatchSnapshot] = []
+        for i, (h, a) in enumerate(pending[: max(0, limit)]):
+            m = SimMatch(
+                match_id=f"sim-up-{i+1}",
+                home_team=h,
+                away_team=a,
+                rng=random.Random(self.seed * 1000 + 900 + i),
+                minutes_per_tick=self.minutes_per_tick,
+            )
+            if m.context is not None:
+                m.context.kickoff = base + timedelta(hours=3 * i)
+            out.append(m.snapshot())
         return out
 
     @property

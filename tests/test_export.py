@@ -1,5 +1,6 @@
 """Bundle assembly for the web simulator (backtest/export.build_bundle)."""
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -120,7 +121,7 @@ def test_export_live_emits_all_live_matches(cfg, tmp_path):
         _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
     ], [])
 
-    doc = export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out"))
+    doc = asyncio.run(export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out")))
     assert doc["live"] is True
     ids = [b["match_id"] for b in doc["bundles"]]
     assert ids == ["m_b", "m_a"]  # most-recently-updated first; finished excluded
@@ -167,7 +168,92 @@ def test_export_live_no_live_match(cfg, tmp_path):
     _persist_match(db, "m_done", [
         _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
     ], [])
-    doc = export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out"))
+    doc = asyncio.run(export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out")))
     assert doc["live"] is False
     assert doc["bundles"] == []
     assert "generated_at" in doc  # staleness heartbeat for the web's "live feed offline" state
+    assert "upcoming" in doc  # projections present even when nothing is live
+
+
+def _pre(match_id="up1", *, home_elo=1900.0, away_elo=1700.0, kickoff=None):
+    return MatchSnapshot(
+        match_id=match_id, provider="test", home_team="Home", away_team="Away",
+        minute=0, period=MatchPeriod.PRE, status="scheduled",
+        context=MatchContext(neutral_venue=True, home_elo=home_elo, away_elo=away_elo, kickoff=kickoff),
+    )
+
+
+def test_build_upcoming_bundle_full_board(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    b = build_upcoming_bundle(cfg, _pre(home_elo=1950.0, away_elo=1650.0, kickoff=T0))
+    assert b["upcoming"] is True and b["live"] is False and b["outcome"] is None
+    assert b["n_ticks"] == 0 and b["ticks"] == []  # no per-tick history for a future game
+    assert b["kickoff"] == T0.isoformat()
+    # The full model board: 1X2 + every scoreline-derived market.
+    series = {g["series"] for g in b["all_markets"]}
+    assert {"KXWCGAME", "KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE"} <= series
+    game = next(g for g in b["all_markets"] if g["series"] == "KXWCGAME")
+    assert abs(sum(c["model"] for c in game["contracts"]) - 1.0) < 1e-6  # 1X2 normalized
+    assert b["model"][0] > b["model"][2]  # home favoured (higher Elo)
+    # No market open → every contract is model-only (no bid/ask/mid).
+    assert all(c["bid"] is None and c["mid"] is None for g in b["all_markets"] for c in g["contracts"])
+    # Correct-score group is the top-N most likely scorelines, descending.
+    scores = [c["model"] for c in next(g for g in b["all_markets"] if g["series"] == "KXWCSCORE")["contracts"]]
+    assert scores == sorted(scores, reverse=True) and len(scores) == 6
+
+
+def test_build_upcoming_bundle_overlays_quotes(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    quotes = [
+        ("KXWCGAME", "g-home", "Home", None, 55, 57),       # 1X2 leg → overlay onto home
+        ("KXWCTOTAL", "t-25", "Over 2.5", 2.5, 48, 50),     # priceable → model + market
+        ("KXWCCORNERS", "c", "9+ corners", 9.0, 30, 33),    # market-only, model can't price
+    ]
+    b = build_upcoming_bundle(cfg, _pre(home_elo=1850.0, away_elo=1800.0), quotes)
+    by = {g["series"]: g for g in b["all_markets"]}
+    home_c = next(c for c in by["KXWCGAME"]["contracts"] if c["label"] == "Home")
+    assert home_c["mid"] == 0.56 and home_c["model"] is not None  # (55+57)/200 overlaid
+    tot = next(c for c in by["KXWCTOTAL"]["contracts"] if c["strike"] == 2.5)
+    assert tot["mid"] == 0.49 and tot["model"] is not None
+    # Real market-only series the model can't price is appended, not hidden.
+    assert "KXWCCORNERS" in by and by["KXWCCORNERS"]["priceable"] is False
+    assert by["KXWCCORNERS"]["contracts"][0]["model"] is None
+
+
+def test_build_upcoming_bundle_surfaces_offladder_quotes(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    # Captured strikes OFF the canonical model ladder must still appear (model-priced),
+    # not be silently dropped — otherwise real pre-off market data is hidden.
+    quotes = [
+        ("KXWCSPREAD", "s35", "Home wins by more than 3.5", 3.5, 20, 23),  # spread ladder maxes 2.5
+        ("KXWCTOTAL", "t65", "Over 6.5 goals", 6.5, 8, 11),                # total ladder maxes 5.5
+    ]
+    b = build_upcoming_bundle(cfg, _pre(home_elo=2050.0, away_elo=1650.0), quotes)
+    by = {g["series"]: g for g in b["all_markets"]}
+    s35 = next((c for c in by["KXWCSPREAD"]["contracts"] if c["strike"] == 3.5), None)
+    t65 = next((c for c in by["KXWCTOTAL"]["contracts"] if c["strike"] == 6.5), None)
+    assert s35 is not None and t65 is not None  # off-ladder strikes surfaced
+    assert s35["mid"] == round((20 + 23) / 200, 4)  # carries the captured market
+    assert s35["model"] is not None and t65["model"] is not None  # and a model price
+
+
+def test_export_live_includes_upcoming(cfg, tmp_path):
+    from wc_kalshi.backtest.export import export_live
+    from wc_kalshi.models.db import Database
+
+    db = Database(f"sqlite:///{tmp_path / 'rec.sqlite3'}")
+    _persist_match(db, "m_done", [
+        _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
+    ], [])
+    doc = asyncio.run(export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out")))
+    assert isinstance(doc["upcoming"], list) and doc["upcoming"]  # sim provider projects fixtures
+    up = doc["upcoming"][0]
+    assert up["upcoming"] is True and up["all_markets"]
+    # Kickoff-sorted (soonest first; undated last).
+    kos = [b.get("kickoff") for b in doc["upcoming"]]
+    assert kos == sorted(kos, key=lambda k: (k is None, k or ""))
+    written = json.loads((tmp_path / "out" / "live.json").read_text())
+    assert len(written["upcoming"]) == len(doc["upcoming"])

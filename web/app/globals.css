@@ -74,6 +74,14 @@ select:hover { border-color: #3a496a; }
 .panel .h2row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .panel .h2row h2 { margin: 0; }
 
+/* upcoming-game projection rectangle (Bets tab): one big panel per future game, with
+   the 1X2 headline + every model-priced market's probability inside it. */
+.bigrect { margin-bottom: 16px; border-left: 3px solid var(--accent); }
+.bigrect .rect-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.bigrect .rect-teams { font-weight: 700; font-size: 15px; }
+.bigrect .rect-elo { color: var(--faint); font-size: 11px; }
+.bigrect .rect-kick { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+
 /* matchup header */
 .matchup { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .matchup .teams { font-size: 16px; font-weight: 650; }

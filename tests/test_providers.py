@@ -172,3 +172,59 @@ async def test_apifootball_no_filter_keeps_all_leagues(monkeypatch):
     snaps = await p.fetch_live()
     assert len(snaps) == 2
     await p.aclose()
+
+
+# -- upcoming-fixture projection -------------------------------------------- #
+async def test_sim_fetch_upcoming_projects_pre_games():
+    p = SimulatedFootballProvider(seed=3, num_matches=2)
+    snaps = await p.fetch_upcoming(limit=5)
+    assert snaps  # surfaces the fixtures after the live window
+    assert all(s.period is MatchPeriod.PRE and s.status == "scheduled" for s in snaps)
+    assert all(s.match_id.startswith("sim-up-") for s in snaps)
+    assert all(s.context and s.context.kickoff is not None for s in snaps)
+    kickoffs = [s.context.kickoff for s in snaps]
+    assert kickoffs == sorted(kickoffs)  # staggered, ascending
+
+
+def test_apifootball_upcoming_from_payload():
+    from wc_kalshi.ingestion.football.apifootball import upcoming_from_payload
+
+    fixture = {
+        "fixture": {"id": 42, "date": "2026-06-30T18:00:00+00:00",
+                    "status": {"short": "NS", "elapsed": None}, "venue": {"name": "Stadium"}},
+        "teams": {"home": {"name": "Spain"}, "away": {"name": "Germany"}},
+        "goals": {"home": None, "away": None},
+        "league": {"id": 1, "name": "World Cup"},
+    }
+    snap = upcoming_from_payload(fixture)
+    assert snap.period is MatchPeriod.PRE and snap.status == "scheduled"
+    assert snap.minute == 0 and snap.home_score == 0 and snap.away_score == 0
+    assert snap.context and snap.context.kickoff is not None
+    assert snap.context.kickoff.isoformat() == "2026-06-30T18:00:00+00:00"
+    assert snap.context.home_elo is not None  # Elo priors injected via apply_ratings
+
+
+async def test_apifootball_fetch_upcoming_filters_league(monkeypatch):
+    from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
+
+    p = APIFootballProvider(api_key="x", fetch_statistics=False, fetch_context=False,
+                            fetch_events=False, league_id=1)
+    captured: dict = {}
+
+    def nsfx(fid, home, away, league_id):
+        return {
+            "fixture": {"id": fid, "date": "2026-07-01T15:00:00+00:00", "status": {"short": "NS"}},
+            "teams": {"home": {"name": home}, "away": {"name": away}},
+            "goals": {"home": None, "away": None}, "league": {"id": league_id, "name": "x"},
+        }
+
+    async def fake_get(endpoint, params):
+        captured.update(endpoint=endpoint, params=params)
+        return {"response": [nsfx(1, "A", "B", 1), nsfx(2, "C", "D", 99)]}
+
+    monkeypatch.setattr(p, "_get", fake_get)
+    snaps = await p.fetch_upcoming(limit=4)
+    assert captured["endpoint"] == "/fixtures" and captured["params"]["next"] == "4"
+    assert len(snaps) == 1 and snaps[0].home_team == "A"  # league 99 dropped
+    assert all(s.period is MatchPeriod.PRE for s in snaps)
+    await p.aclose()

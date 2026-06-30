@@ -32,6 +32,15 @@ class FootballDataProvider(ABC):
         """
         return None
 
+    async def fetch_upcoming(self, limit: int = 8) -> list["MatchSnapshot"]:
+        """Return PRE-period snapshots for upcoming (not-yet-started) matches.
+
+        Used to PROJECT future games before kickoff: a minute-0 PRE snapshot runs
+        the model down to its Elo-only prior. Distinct from ``fetch_live`` (in-play
+        only). Default: unsupported — the provider surfaces no upcoming games.
+        """
+        return []
+
     async def aclose(self) -> None:  # pragma: no cover - default no-op
         return None
 

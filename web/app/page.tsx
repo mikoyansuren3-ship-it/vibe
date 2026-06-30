@@ -28,6 +28,7 @@ export default function Page() {
   const [kellyFraction, setKelly] = useState(0.25);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [liveBundles, setLiveBundles] = useState<Bundle[]>([]);
+  const [upcomingBundles, setUpcomingBundles] = useState<Bundle[]>([]);
   const [liveUpdatedAt, setLiveUpdatedAt] = useState<number | null>(null);
 
   // load data
@@ -57,9 +58,10 @@ export default function Page() {
   const didAutoLive = useRef(false);
   useEffect(() => {
     let alive = true;
-    const tick = () => loadLive().then(({ bundles: lb, generatedAt }) => {
+    const tick = () => loadLive().then(({ bundles: lb, upcoming, generatedAt }) => {
       if (!alive) return;
       setLiveBundles(lb);
+      setUpcomingBundles(upcoming);
       setLiveUpdatedAt(generatedAt);
     });
     tick();
@@ -132,7 +134,7 @@ export default function Page() {
         )}
 
         {ready && tab === "bets" && (
-          <Bets bundles={bundles} liveBundles={liveBundles} liveUpdatedAt={liveUpdatedAt} selectedId={selectedId} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} adv={adv} />
+          <Bets bundles={bundles} liveBundles={liveBundles} upcomingBundles={upcomingBundles} liveUpdatedAt={liveUpdatedAt} selectedId={selectedId} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} adv={adv} />
         )}
 
         {ready && tab === "sandbox" && adv && (
