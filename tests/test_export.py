@@ -287,6 +287,23 @@ def test_build_upcoming_bundle_advance_market_overlay(cfg):
     assert home_adv["model"] is not None  # alongside the model price
 
 
+def test_build_upcoming_bundle_half_markets(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    b = build_upcoming_bundle(cfg, _pre(home_elo=2000.0, away_elo=1700.0))
+    by = {g["series"]: g for g in b["all_markets"]}
+    assert {"KXWC1H", "KXWC1HTOTAL", "KXWC1HBTTS", "KXWC2H", "KXWC2HTOTAL", "KXWC2HBTTS"} <= set(by)
+    # A half result is a valid 1X2 (sums to 1).
+    assert abs(sum(c["model"] for c in by["KXWC1H"]["contracts"]) - 1.0) < 1e-6
+    # A half over-line is below the full-match one (fewer goals in a half) ...
+    h1 = next(c["model"] for c in by["KXWC1HTOTAL"]["contracts"] if c["strike"] == 0.5)
+    full = next(c["model"] for c in by["KXWCTOTAL"]["contracts"] if c["strike"] == 0.5)
+    assert h1 < full
+    # ... and the 2nd half outscores the 1st (HALF1_FRACTION < 0.5).
+    h2 = next(c["model"] for c in by["KXWC2HTOTAL"]["contracts"] if c["strike"] == 0.5)
+    assert h2 > h1
+
+
 def test_export_live_includes_upcoming(cfg, tmp_path):
     from wc_kalshi.backtest.export import export_live
     from wc_kalshi.models.db import Database

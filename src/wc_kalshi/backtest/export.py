@@ -88,6 +88,9 @@ _UPCOMING_TOTAL_LINES = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
 _UPCOMING_SPREAD_LINES = (0.5, 1.5, 2.5)
 _UPCOMING_TEAMTOTAL_LINES = (0.5, 1.5, 2.5, 3.5)
 _UPCOMING_N_SCORES = 6
+_HALF_TOTAL_LINES = (0.5, 1.5, 2.5)  # fewer goals per half
+# Half-market series the model board prices from the per-half scoreline matrices.
+_HALF_SERIES = {"KXWC1H", "KXWC2H", "KXWC1HTOTAL", "KXWC2HTOTAL", "KXWC1HBTTS", "KXWC2HBTTS"}
 
 
 def _derived_side(sub: str | None, home: str, away: str) -> str | None:
@@ -654,6 +657,14 @@ def _quote_key(series, sub, strike, home, away):
         return ("KXWCGAME", None, side)
     if series == "KXWCADVANCE":
         return ("KXWCADVANCE", None, side)
+    if series in ("KXWC1H", "KXWC2H"):  # half result
+        if sub and ("draw" in sub.lower() or "tie" in sub.lower()):
+            return (series, None, "draw")
+        return (series, None, side)
+    if series in ("KXWC1HTOTAL", "KXWC2HTOTAL"):
+        return (series, strike_f, None)
+    if series in ("KXWC1HBTTS", "KXWC2HBTTS"):
+        return (series, None, None)
     if series in ("KXWCTOTAL", "KXWCBTTS"):
         return (series, strike_f, None)
     if series in ("KXWCSPREAD", "KXWCTEAMTOTAL"):
@@ -851,6 +862,39 @@ def _knockout_board(
     return groups, adv
 
 
+def _half_board(model, snap: MatchSnapshot, quotes: dict | None = None) -> list[dict[str, Any]]:
+    """1st/2nd-half result, total goals, and BTTS, derived from the per-half scoreline
+    matrices (coherent with the full-match board via Poisson additivity). Model-only unless
+    a captured half-market quote is overlaid via ``quotes``."""
+    quotes = quotes or {}
+    home, away = snap.home_team, snap.away_team
+    m1, m2 = model.half_scoreline_matrices(snap)
+
+    def contract(label, strike, prob, key):
+        bid, ask = quotes.get(key, (None, None))
+        mid = round((bid + ask) / 200.0, 4) if bid is not None and ask is not None else None
+        return {"label": label, "strike": strike, "bid": bid, "ask": ask, "mid": mid,
+                "model": round(prob, 4)}
+
+    groups: list[dict[str, Any]] = []
+    for sr, st, sb, m in (("KXWC1H", "KXWC1HTOTAL", "KXWC1HBTTS", m1),
+                          ("KXWC2H", "KXWC2HTOTAL", "KXWC2HBTTS", m2)):
+        ph, pd, pa = _one_x_two_from_matrix(m)
+        groups.append({"series": sr, "label": _SERIES_LABEL[sr], "priceable": True, "contracts": [
+            contract(home, None, ph, (sr, None, "home")),
+            contract("Draw", None, pd, (sr, None, "draw")),
+            contract(away, None, pa, (sr, None, "away")),
+        ]})
+        groups.append({"series": st, "label": _SERIES_LABEL[st], "priceable": True, "contracts": [
+            contract(f"Over {line}", line, prob_total_over(m, line), (st, line, None))
+            for line in _HALF_TOTAL_LINES
+        ]})
+        groups.append({"series": sb, "label": _SERIES_LABEL[sb], "priceable": True, "contracts": [
+            contract("Both teams to score", None, prob_btts(m), (sb, None, None)),
+        ]})
+    return groups
+
+
 def build_upcoming_bundle(
     cfg: AppConfig, snap: MatchSnapshot, quote_rows: list | None = None,
 ) -> dict[str, Any]:
@@ -870,10 +914,12 @@ def build_upcoming_bundle(
     if quote_rows:
         # Off-ladder captured strikes in model-board series (e.g. Over 5.5) — model-priced.
         _append_offladder_quotes(board, quote_rows, placed_keys, M, home, away)
-        # Market-only series the model can't price (corners, halves, first-to-score …).
+        # Market-only series the model can't price (corners, first-to-score …). Scoreline,
+        # advance and half series are owned by the model boards, so exclude them here.
         for g in _live_market_board(model, snap, quote_rows, home, away):
-            if g["series"] not in _MODEL_BOARD_SERIES:
+            if g["series"] not in _MODEL_BOARD_SERIES and g["series"] not in _HALF_SERIES:
                 board.append(g)
+    board += _half_board(model, snap, quotes)  # 1st/2nd-half result / total / BTTS
 
     ctx = snap.context
     kickoff = ctx.kickoff.isoformat() if ctx and ctx.kickoff else None
