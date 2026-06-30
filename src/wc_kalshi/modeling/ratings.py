@@ -16,9 +16,24 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from ..models.schemas import MatchContext
+
+# Round labels that denote a knockout tie (no draw — extra time / penalties decide it).
+_KNOCKOUT_RE = re.compile(r"round of|final|quarter|semi|knockout|play-?off|1/\d|last \d", re.I)
+
+
+def is_knockout_round(round_label: str | None) -> bool:
+    """True if a competition round string (e.g. API-Football ``league.round``) denotes a
+    knockout tie. False for the group stage or an unknown/empty label."""
+    if not round_label:
+        return False
+    if "group" in round_label.lower():
+        return False
+    return bool(_KNOCKOUT_RE.search(round_label))
+
 
 # Approximate World-Football-Elo strength for likely 2026 World Cup nations.
 TEAM_ELO: dict[str, float] = {

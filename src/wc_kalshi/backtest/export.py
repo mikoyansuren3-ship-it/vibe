@@ -29,6 +29,7 @@ from ..modeling.derived import (
     prob_btts, prob_correct_score, prob_spread, prob_team_total_over, prob_total_over,
 )
 from ..modeling.inplay import DixonColesInplayModel
+from ..modeling.knockout import knockout_breakdown
 from .replay import Backtester, _bucket_market_by_tick
 
 log = get_logger("backtest.export")
@@ -60,15 +61,27 @@ _SERIES_LABEL = {
     "KXWC2HSPREAD": "2nd half spread",
     "KXWC1HBTTS": "1st half BTTS",
     "KXWC2HBTTS": "2nd half BTTS",
+    # Knockout-stage markets. KXWCADVANCE is the real Kalshi series (2-way, incl. ET +
+    # penalties); the rest are synthetic display-only codes for model projections Kalshi
+    # does not list (method of advancement, go-to-ET/penalties, extra-time scoreline).
+    "KXWCADVANCE": "To advance (incl. extra time & penalties)",
+    "KXWCMOV": "Method of advancement",
+    "KXWCTOET": "Goes to extra time",
+    "KXWCTOPENS": "Goes to penalties",
+    "KXWCETSCORE": "Extra-time scoreline",
 }
 # Series the full-match scoreline matrix can price (everything else is market-only).
-_PRICEABLE_SERIES = {"KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE"}
+_PRICEABLE_SERIES = {"KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE", "KXWCADVANCE"}
 
 # Series the canonical model board enumerates for an UPCOMING game (no captured Kalshi
 # contracts to mirror yet — we generate the strikes ourselves and price each off the
 # Dixon-Coles matrix). The market-only remainder (corners, halves, first-to-score …) is
 # only shown when real pre-off quotes exist.
-_MODEL_BOARD_SERIES = {"KXWCGAME", "KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE"}
+_SCORELINE_MODEL_SERIES = {"KXWCGAME", "KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE"}
+# Knockout series owned solely by _knockout_board (so other paths never double-emit them).
+_KNOCKOUT_SERIES = {"KXWCADVANCE", "KXWCMOV", "KXWCTOET", "KXWCTOPENS", "KXWCETSCORE"}
+# Series the model board covers (excluded from the market-only append): scoreline + advance.
+_MODEL_BOARD_SERIES = _SCORELINE_MODEL_SERIES | {"KXWCADVANCE"}
 # Canonical strike ladders for the model-only board. Tune to real Kalshi WC strikes
 # when the contract conventions are confirmed (plan assumption #6).
 _UPCOMING_TOTAL_LINES = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
@@ -576,7 +589,7 @@ def build_live_bundle(
     ticks, tickers, preoff = _build_ticks(cfg, match_snaps, market_snaps)
     first = match_snaps[0]
     ctx = first.context
-    bundle = {
+    bundle: dict[str, Any] = {
         "match_id": match_id,
         "home_team": first.home_team,
         "away_team": first.away_team,
@@ -594,10 +607,22 @@ def build_live_bundle(
         "golden": {"fills": [], "n_fills": 0, "pnl": 0},
         "config": _config_block(cfg, cfg.risk.starting_bankroll, 1.0),
     }
-    if all_quote_rows:
-        bundle["all_markets"] = _live_market_board(
-            model, last, all_quote_rows, first.home_team, first.away_team
-        )
+    board = (
+        _live_market_board(model, last, all_quote_rows, first.home_team, first.away_team)
+        if all_quote_rows else []
+    )
+    # Live knockout game: lead with the to-advance / method-of-victory markets (priced off
+    # the current in-play state). Group-stage games leave these keys absent.
+    if ctx and ctx.is_knockout:
+        quotes = _quotes_by_key(all_quote_rows, first.home_team, first.away_team) if all_quote_rows else {}
+        ko_groups, advance = _knockout_board(model, last, quotes)
+        # Drop any captured advance group from the market board — _knockout_board owns it.
+        board = ko_groups + [g for g in board if g["series"] not in _KNOCKOUT_SERIES]
+        bundle["is_knockout"] = True
+        bundle["round"] = ctx.round
+        bundle["advance"] = [round(advance[0], 4), round(advance[1], 4)]
+    if board:
+        bundle["all_markets"] = board
     return bundle
 
 
@@ -627,6 +652,8 @@ def _quote_key(series, sub, strike, home, away):
         if sub and ("draw" in sub.lower() or "tie" in sub.lower()):
             return ("KXWCGAME", None, "draw")
         return ("KXWCGAME", None, side)
+    if series == "KXWCADVANCE":
+        return ("KXWCADVANCE", None, side)
     if series in ("KXWCTOTAL", "KXWCBTTS"):
         return (series, strike_f, None)
     if series in ("KXWCSPREAD", "KXWCTEAMTOTAL"):
@@ -753,7 +780,7 @@ def _append_offladder_quotes(board, quote_rows, placed_keys, M, home, away) -> N
     by_series = {g["series"]: g for g in board}
     seen = set(placed_keys)
     for series, _ticker, sub, strike, bid, ask in quote_rows or []:
-        if series not in _MODEL_BOARD_SERIES:
+        if series not in _SCORELINE_MODEL_SERIES:  # advance is owned by _knockout_board
             continue
         key = _quote_key(series, sub, strike, home, away)
         if key is not None:
@@ -773,6 +800,55 @@ def _append_offladder_quotes(board, quote_rows, placed_keys, M, home, away) -> N
             "bid": bid, "ask": ask, "mid": mid,
             "model": round(mp, 4) if mp is not None else None,
         })
+
+
+def _knockout_board(
+    model, snap: MatchSnapshot, quotes: dict | None = None
+) -> tuple[list[dict[str, Any]], tuple[float, float]]:
+    """Model-board groups for a KNOCKOUT game: KXWCADVANCE (2-way, model + market overlay
+    where a captured Kalshi quote exists) plus model-only projections — method of advancement,
+    goes-to-extra-time, goes-to-penalties, and the likely extra-time scorelines. Returns
+    ``(groups, advance)`` with ``advance`` the (home, away) advance probabilities."""
+    quotes = quotes or {}
+    home, away = snap.home_team, snap.away_team
+    b = knockout_breakdown(model, snap)
+    adv = b["advance"]
+
+    def contract(label, model_prob, key=None):
+        bid, ask = quotes.get(key, (None, None)) if key is not None else (None, None)
+        mid = round((bid + ask) / 200.0, 4) if bid is not None and ask is not None else None
+        return {
+            "label": label, "strike": None, "bid": bid, "ask": ask, "mid": mid,
+            "model": round(model_prob, 4) if model_prob is not None else None,
+        }
+
+    wr, we, wp = b["win_regulation"], b["win_extra_time"], b["win_penalties"]
+    groups = [
+        {"series": "KXWCADVANCE", "label": _SERIES_LABEL["KXWCADVANCE"], "priceable": True,
+         "contracts": [
+             contract(f"{home} advances", adv[0], ("KXWCADVANCE", None, "home")),
+             contract(f"{away} advances", adv[1], ("KXWCADVANCE", None, "away")),
+         ]},
+        {"series": "KXWCMOV", "label": _SERIES_LABEL["KXWCMOV"], "priceable": True,
+         "contracts": [
+             contract(f"{home} in regulation", wr[0]),
+             contract(f"{home} in extra time", we[0]),
+             contract(f"{home} on penalties", wp[0]),
+             contract(f"{away} in regulation", wr[1]),
+             contract(f"{away} in extra time", we[1]),
+             contract(f"{away} on penalties", wp[1]),
+         ]},
+        {"series": "KXWCTOET", "label": _SERIES_LABEL["KXWCTOET"], "priceable": True,
+         "contracts": [contract("Tie in regulation → extra time", b["go_to_extra_time"])]},
+        {"series": "KXWCTOPENS", "label": _SERIES_LABEL["KXWCTOPENS"], "priceable": True,
+         "contracts": [contract("Level after extra time → penalties", b["go_to_penalties"])]},
+        {"series": "KXWCETSCORE", "label": _SERIES_LABEL["KXWCETSCORE"], "priceable": True,
+         "contracts": [
+             contract(f"Draw {i}-{i}" if i == j else f"{home} {i}-{j} {away}", prob)
+             for (i, j), prob in b["et_scorelines"]
+         ]},
+    ]
+    return groups, adv
 
 
 def build_upcoming_bundle(
@@ -801,7 +877,7 @@ def build_upcoming_bundle(
 
     ctx = snap.context
     kickoff = ctx.kickoff.isoformat() if ctx and ctx.kickoff else None
-    return {
+    bundle: dict[str, Any] = {
         "match_id": snap.match_id,
         "home_team": home,
         "away_team": away,
@@ -823,6 +899,15 @@ def build_upcoming_bundle(
         "config": _config_block(cfg, cfg.risk.starting_bankroll, 1.0),
         "all_markets": board,
     }
+    # Knockout games lead with the to-advance / method-of-victory markets; the regulation
+    # board (1X2, totals …) follows. Group-stage bundles leave these keys absent.
+    if ctx and ctx.is_knockout:
+        ko_groups, advance = _knockout_board(model, snap, quotes)
+        bundle["all_markets"] = ko_groups + board
+        bundle["is_knockout"] = True
+        bundle["round"] = ctx.round
+        bundle["advance"] = [round(advance[0], 4), round(advance[1], 4)]
+    return bundle
 
 
 def _read_all_quotes(db_path: str, match_id: str) -> list:

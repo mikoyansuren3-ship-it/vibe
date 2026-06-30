@@ -51,6 +51,13 @@ FIXTURES: list[tuple[str, str]] = [
     ("England", "Morocco"),
 ]
 
+# Knockout-stage upcoming fixtures (offline demo) — surfaced by ``fetch_upcoming`` with a
+# round label so the projection board shows the to-advance / extra-time / penalty markets.
+KNOCKOUT_FIXTURES: list[tuple[str, str]] = [
+    ("Brazil", "Japan"),
+    ("Portugal", "Croatia"),
+]
+
 
 def _prior(team: str) -> tuple[float, int, float]:
     return TEAM_PRIORS.get(team, _DEFAULT_PRIOR)
@@ -264,12 +271,17 @@ class SimulatedFootballProvider(FootballDataProvider):
         Built fresh and never advanced, so every snapshot stays in ``MatchPeriod.PRE``
         (``status="scheduled"``) — the model degenerates to its Elo-only prior. Ids are
         ``sim-up-*`` so they never collide with the ``sim-*`` live/recorded matches."""
-        pending = FIXTURES[self.num_matches:] or FIXTURES
+        # (home, away, round_label) — group-stage fixtures after the live window, then the
+        # knockout demo fixtures so the board shows both kinds of upcoming game.
+        pending: list[tuple[str, str, str | None]] = [
+            (h, a, None) for (h, a) in (FIXTURES[self.num_matches:] or FIXTURES)
+        ]
+        pending += [(h, a, "Round of 16") for (h, a) in KNOCKOUT_FIXTURES]
         base = utcnow() + timedelta(hours=6)
         out: list[MatchSnapshot] = []
-        for i, (h, a) in enumerate(pending[: max(0, limit)]):
+        for i, (h, a, round_label) in enumerate(pending[: max(0, limit)]):
             m = SimMatch(
-                match_id=f"sim-up-{i+1}",
+                match_id=f"sim-up-{'ko-' if round_label else ''}{i+1}",
                 home_team=h,
                 away_team=a,
                 rng=random.Random(self.seed * 1000 + 900 + i),
@@ -277,6 +289,9 @@ class SimulatedFootballProvider(FootballDataProvider):
             )
             if m.context is not None:
                 m.context.kickoff = base + timedelta(hours=3 * i)
+                if round_label:
+                    m.context.round = round_label
+                    m.context.is_knockout = True
             out.append(m.snapshot())
         return out
 

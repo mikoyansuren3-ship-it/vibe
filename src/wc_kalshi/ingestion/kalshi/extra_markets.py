@@ -25,6 +25,8 @@ log = get_logger("kalshi.extra_markets")
 # Per-match WC series worth recording (roadmap Tiers 1/2/4). KXWCGAME is already captured
 # by the typed market feed, so it's omitted here.
 EXTRA_WC_SERIES: tuple[str, ...] = (
+    # Knockout — the real Kalshi 2-way "to advance" series (incl. extra time + penalties).
+    "KXWCADVANCE",
     # Tier 1 — full-match scoreline-derived
     "KXWCTOTAL", "KXWCSPREAD", "KXWCBTTS", "KXWCSCORE", "KXWCTEAMTOTAL", "KXWCWINMARGIN",
     "KXWCFTTS", "KXWCTTSF",

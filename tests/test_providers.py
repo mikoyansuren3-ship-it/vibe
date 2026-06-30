@@ -228,3 +228,38 @@ async def test_apifootball_fetch_upcoming_filters_league(monkeypatch):
     assert len(snaps) == 1 and snaps[0].home_team == "A"  # league 99 dropped
     assert all(s.period is MatchPeriod.PRE for s in snaps)
     await p.aclose()
+
+
+# -- stage awareness (knockout vs group) ------------------------------------ #
+def test_is_knockout_round_truth_table():
+    from wc_kalshi.modeling.ratings import is_knockout_round
+
+    for label in ("Round of 16", "Round of 32", "Quarter-finals", "Semi-finals", "Final",
+                  "3rd Place Final", "Knockout Round", "Play-offs", "1/8-finals"):
+        assert is_knockout_round(label), label
+    for label in ("Group A", "Group Stage", "Regular Season - 1", "Matchday 3", "", None):
+        assert not is_knockout_round(label), label
+
+
+async def test_sim_fetch_upcoming_includes_knockout():
+    p = SimulatedFootballProvider(seed=3, num_matches=2)
+    snaps = await p.fetch_upcoming(limit=8)
+    ko = [s for s in snaps if s.context and s.context.is_knockout]
+    assert ko  # the demo surfaces knockout fixtures
+    assert all(s.context.round == "Round of 16" for s in ko)
+    assert all(s.match_id.startswith("sim-up-ko-") for s in ko)
+    # group-stage upcoming fixtures remain non-knockout.
+    assert any(s.context and not s.context.is_knockout for s in snaps)
+
+
+def test_apifootball_upcoming_marks_knockout_round():
+    from wc_kalshi.ingestion.football.apifootball import upcoming_from_payload
+
+    fixture = {
+        "fixture": {"id": 9, "date": "2026-07-05T18:00:00+00:00", "status": {"short": "NS"}},
+        "teams": {"home": {"name": "Brazil"}, "away": {"name": "Japan"}},
+        "goals": {"home": None, "away": None},
+        "league": {"id": 1, "name": "World Cup", "round": "Round of 16"},
+    }
+    snap = upcoming_from_payload(fixture)
+    assert snap.context.round == "Round of 16" and snap.context.is_knockout is True

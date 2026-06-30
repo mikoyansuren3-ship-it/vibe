@@ -90,6 +90,8 @@ class MatchContext(BaseModel):
     kickoff: datetime | None = None
     venue: str | None = None
     neutral_venue: bool = True  # World Cup: most games neutral for both teams
+    round: str | None = None  # competition round label, e.g. "Group A", "Round of 16", "Final"
+    is_knockout: bool = False  # knockout tie (no draw — goes to extra time / penalties)
     home_elo: float | None = None
     away_elo: float | None = None
     home_fifa_rank: int | None = None
