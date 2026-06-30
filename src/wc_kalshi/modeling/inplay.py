@@ -160,6 +160,15 @@ class DixonColesInplayModel(ProbabilityModel):
         lam, mu = self._apply_game_state(match, lam, mu)
         return lam, mu
 
+    def remaining_rates(self, match: MatchSnapshot) -> tuple[float, float]:
+        """Public ``(λ_rem, μ_rem)`` — the remaining-goal expectations that build ``M`` and
+        the 1X2 head (plan P0.1: expose the backbone rates for downstream heads). The SAME
+        rates a bespoke head (e.g. first-to-score's competing-Poisson split) must consume to
+        stay coherent with the scoreline matrix. Includes red-card + game-state multipliers;
+        at a level (0-0) score the game-state factor is the identity, so a first-passage head
+        — only un-settled while 0-0 — sees the clean conditional rates."""
+        return self._remaining_rates(match)
+
     def level_game_per_minute_rates(self, match: MatchSnapshot) -> tuple[float, float]:
         """Per-minute scoring rates with the game-state multiplier neutral (score treated as
         level) — the clean conditional rates a FUTURE extra-time / first-to-score / team-total
