@@ -18,34 +18,38 @@ export function Tile({ k, v, c }: { k: string; v: string; c?: string }) {
   );
 }
 
-/** Stacked model (top) / market (bottom) probability bar + edge readout. */
+/** Stacked model (top) / market (bottom) probability bars + edge readout. N-way: the 1X2
+ *  callers pass length-3 arrays; the knockout "to advance" headline passes length-2. */
 export function DualBars({
   labels,
   model,
   market,
+  colors,
   showEdge = true,
 }: {
-  labels: [string, string, string];
-  model: [number, number, number];
-  market: [number | null, number | null, number | null];
+  labels: string[];
+  model: number[];
+  market: (number | null)[];
+  colors?: string[];
   showEdge?: boolean;
 }) {
-  const keys: OutcomeKey[] = ["home", "draw", "away"];
   const grid = showEdge ? "64px 1fr 60px" : "64px 1fr";
+  const palette = colors ?? [OUT_COLOR.home, OUT_COLOR.draw, OUT_COLOR.away];
   return (
     <div className="probs">
       <div className="probhead" style={{ gridTemplateColumns: grid }}>
         <span /><span>{showEdge ? "model ▸ market" : "the bot ▸ the market"}</span>{showEdge && <span style={{ textAlign: "right" }}>edge</span>}
       </div>
-      {keys.map((k, i) => {
+      {labels.map((label, i) => {
         const m = model[i];
         const mk = market[i];
         const edge = mk == null ? null : m - mk;
+        const color = palette[i] ?? "var(--accent)";
         return (
-          <div className="probrow" key={k} style={{ gridTemplateColumns: grid }}>
-            <span className="tag" style={{ color: OUT_COLOR[k] }}>{labels[i]}</span>
+          <div className="probrow" key={i} style={{ gridTemplateColumns: grid }}>
+            <span className="tag" style={{ color }}>{label}</span>
             <div className="dualbar">
-              <div className="model-fill" style={{ width: `${m * 100}%`, background: OUT_COLOR[k] }} />
+              <div className="model-fill" style={{ width: `${m * 100}%`, background: color }} />
               <div className="market-fill" style={{ width: `${(mk ?? 0) * 100}%` }} />
               <span className="rowlbl top">{pct(m)}</span>
               <span className="rowlbl bot">{pct(mk)}</span>

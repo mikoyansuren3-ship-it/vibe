@@ -203,20 +203,27 @@ function kickoffLabel(iso?: string | null): string {
   return `kickoff in ${Math.floor(hrs / 24)}d ${hrs % 24}h`;
 }
 
-// A future game projected as a big rectangle: the 1X2 headline (model bars, with the
-// market overlaid when a pre-off Kalshi market is open) plus every model-priced market's
-// probability. Read-only — the bot trades nothing before kickoff.
+// Knockout projection series Kalshi doesn't list a market for (model-only).
+const KO_PROJECTION_SERIES = new Set(["KXWCMOV", "KXWCTOET", "KXWCTOPENS", "KXWCETSCORE"]);
+
+// A future game projected as a big rectangle. Group stage: a 1X2 headline + every market's
+// probability. Knockout: a 2-way "to advance" headline (includes ET + penalties) + the
+// method-of-victory / extra-time projections, with the regulation result kept below.
+// Read-only — the bot trades nothing before kickoff.
 function UpcomingGame({ bundle }: { bundle: Bundle }) {
   const groups = bundle.all_markets ?? [];
-  const game = groups.find((g) => g.series === "KXWCGAME");
-  const rest = groups.filter((g) => g.series !== "KXWCGAME");
-  const model: [number, number, number] = bundle.model ?? [
-    game?.contracts[0]?.model ?? 0, game?.contracts[1]?.model ?? 0, game?.contracts[2]?.model ?? 0,
-  ];
-  const market: [number | null, number | null, number | null] = [
-    game?.contracts[0]?.mid ?? null, game?.contracts[1]?.mid ?? null, game?.contracts[2]?.mid ?? null,
-  ];
-  const hasMarket = market.some((m) => m != null);
+  const isKO = !!bundle.is_knockout;
+  const headSeries = isKO ? "KXWCADVANCE" : "KXWCGAME";
+  const head = groups.find((g) => g.series === headSeries);
+  const rest = groups.filter((g) => g.series !== headSeries);
+
+  const headLabels = isKO ? [bundle.home_team, bundle.away_team] : [bundle.home_team, "Draw", bundle.away_team];
+  const headColors = isKO ? ["var(--home)", "var(--away)"] : ["var(--home)", "var(--draw)", "var(--away)"];
+  const fallback = (head?.contracts ?? []).map((c) => c.model ?? 0);
+  const headModel: number[] = isKO ? (bundle.advance ?? fallback) : (bundle.model ?? fallback);
+  const headMarket: (number | null)[] = (head?.contracts ?? []).map((c) => c.mid ?? null);
+  const hasMarket = headMarket.some((m) => m != null);
+
   return (
     <div className="panel bigrect">
       <div className="rect-head">
@@ -224,17 +231,28 @@ function UpcomingGame({ bundle }: { bundle: Bundle }) {
         <span className="rect-teams">
           {bundle.home_team} <span style={{ color: "var(--faint)", fontWeight: 400 }}>vs</span> {bundle.away_team}
         </span>
+        {bundle.round && <span className="rect-elo mono">{bundle.round}</span>}
         {bundle.home_elo != null && bundle.away_elo != null && (
           <span className="rect-elo mono">Elo {Math.round(bundle.home_elo)}–{Math.round(bundle.away_elo)}</span>
         )}
         <span className="rect-kick mono">{kickoffLabel(bundle.kickoff)}</span>
       </div>
-      <DualBars labels={[bundle.home_team, "Draw", bundle.away_team]} model={model} market={market} showEdge={hasMarket} />
-      {rest.map((g) => (
-        <Group key={g.series} title={g.label}
-          sub={hasMarket ? "model probability vs market — projection only" : "model probability — no market open yet"}
-          lines={g.contracts.map((c) => contractToLine(c, bundle.config))} />
-      ))}
+      {isKO && <div className="note" style={{ margin: "0 0 2px" }}>To advance — includes extra time &amp; penalties</div>}
+      <DualBars labels={headLabels} model={headModel} market={headMarket} colors={headColors} showEdge={hasMarket} />
+      {rest.map((g) => {
+        const title = isKO && g.series === "KXWCGAME" ? "Match result (regulation)" : g.label;
+        const sub = KO_PROJECTION_SERIES.has(g.series)
+          ? "model projection — Kalshi has no market for this"
+          : hasMarket ? "model probability vs market — projection only" : "model probability — no market open yet";
+        return (
+          <Group key={g.series} title={title} sub={sub}
+            lines={g.contracts.map((c) => {
+              const ln = contractToLine(c, bundle.config);
+              if (isKO && g.series === "KXWCGAME" && /draw|tie/i.test(c.label)) ln.label = "Draw → extra time";
+              return ln;
+            })} />
+        );
+      })}
     </div>
   );
 }
