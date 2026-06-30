@@ -33,6 +33,20 @@ _GRIDS: dict[str, list[float]] = {
     "chaser_mult": [1.0, 1.03, 1.06, 1.1],
 }
 
+# Upgraded intensity-engine grid (plan P0.1/P0.4): drops ``live_xg_weight`` (unused in
+# credibility mode — ``xg_info_k`` replaces it) and adds the four new intensity knobs. Fit
+# with ``base.xg_blend_mode="credibility"``. Used by scripts/fit_backbone.py for the A/B.
+_GRIDS_INTENSITY: dict[str, list[float]] = {
+    "red_card_xg_penalty": [0.45, 0.55, 0.65, 0.75],
+    "elo_tilt": [0.15, 0.2, 0.25, 0.3, 0.35],
+    "leader_mult": [0.92, 0.95, 0.97, 1.0],
+    "chaser_mult": [1.0, 1.03, 1.06, 1.1],
+    "goal_time_slope": [0.0, 0.15, 0.3, 0.45],
+    "score_state_per_goal": [0.0, 0.25, 0.5, 0.75],
+    "xg_info_k": [0.6, 1.0, 1.5, 2.2],
+    "red_card_opponent_boost": [1.1, 1.25, 1.4, 1.55],
+}
+
 
 @dataclass
 class FitResult:
@@ -85,8 +99,12 @@ def fit_constants(
     base: ModelSection,
     *,
     passes: int = 2,
+    grids: dict[str, list[float]] | None = None,
 ) -> FitResult:
-    """Coordinate-descent fit of the behavioural constants minimising log-loss."""
+    """Coordinate-descent fit of the behavioural constants minimising log-loss. ``grids``
+    selects which constants to fit (defaults to the legacy ``_GRIDS``; pass
+    ``_GRIDS_INTENSITY`` to fit the upgraded intensity engine)."""
+    grids = grids or _GRIDS
     dataset: list[tuple[list[MatchSnapshot], Outcome]] = []
     for match in matches:
         if not match:
@@ -97,9 +115,8 @@ def fit_constants(
     before, n = _eval_logloss(cfg, dataset)
     best = before
     for _ in range(max(1, passes)):
-        for name, grid in _GRIDS.items():
-            current = getattr(cfg, name)
-            best_val = current
+        for name, grid in grids.items():
+            best_val = getattr(cfg, name)
             for candidate in grid:
                 trial = cfg.model_copy(update={name: candidate})
                 ll, _ = _eval_logloss(trial, dataset)
@@ -108,5 +125,5 @@ def fit_constants(
                     best_val = candidate
             cfg = cfg.model_copy(update={name: best_val})
 
-    params = {k: getattr(cfg, k) for k in _GRIDS}
+    params = {k: getattr(cfg, k) for k in grids}
     return FitResult(params=params, logloss_before=before, logloss_after=best, n_samples=n)
