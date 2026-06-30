@@ -28,6 +28,7 @@ from ..models.schemas import MatchSnapshot
 from ..modeling.derived import (
     prob_btts, prob_correct_score, prob_spread, prob_team_total_over, prob_total_over,
 )
+from ..modeling.first_to_score import first_to_score
 from ..modeling.inplay import DixonColesInplayModel
 from ..modeling.knockout import knockout_breakdown
 from .replay import Backtester, _bucket_market_by_tick
@@ -91,6 +92,10 @@ _UPCOMING_N_SCORES = 6
 _HALF_TOTAL_LINES = (0.5, 1.5, 2.5)  # fewer goals per half
 # Half-market series the model board prices from the per-half scoreline matrices.
 _HALF_SERIES = {"KXWC1H", "KXWC2H", "KXWC1HTOTAL", "KXWC2HTOTAL", "KXWC1HBTTS", "KXWC2HBTTS"}
+# First-to-score series, owned solely by _first_to_score_board (priced off the backbone
+# remaining rates, not the matrix). Two captured Kalshi codes for the same market; both
+# normalize to the KXWCFTTS board group via _quote_key.
+_FTS_SERIES = {"KXWCFTTS", "KXWCTTSF"}
 
 
 def _derived_side(sub: str | None, home: str, away: str) -> str | None:
@@ -614,10 +619,19 @@ def build_live_bundle(
         _live_market_board(model, last, all_quote_rows, first.home_team, first.away_team)
         if all_quote_rows else []
     )
+    quotes = _quotes_by_key(all_quote_rows, first.home_team, first.away_team) if all_quote_rows else {}
+    # First-to-score: price KXWCFTTS off the backbone rates (was market-only), passing the tick
+    # stream so a both-scored game settles on the real first scorer. Replaces the market-only
+    # group with the priced one while the game is still 0-0; once decided/unresolvable it emits
+    # nothing and the captured market-only quote is left as-is. Gated on captured quotes so the
+    # live board stays an *enrichment* of real markets (no lone synthesized box).
+    if all_quote_rows:
+        fts_groups = _first_to_score_board(model, last, quotes, history=match_snaps)
+        if fts_groups:
+            board = fts_groups + [g for g in board if g["series"] not in _FTS_SERIES]
     # Live knockout game: lead with the to-advance / method-of-victory markets (priced off
     # the current in-play state). Group-stage games leave these keys absent.
     if ctx and ctx.is_knockout:
-        quotes = _quotes_by_key(all_quote_rows, first.home_team, first.away_team) if all_quote_rows else {}
         ko_groups, advance = _knockout_board(model, last, quotes)
         # Drop any captured advance group from the market board — _knockout_board owns it.
         board = ko_groups + [g for g in board if g["series"] not in _KNOCKOUT_SERIES]
@@ -671,6 +685,11 @@ def _quote_key(series, sub, strike, home, away):
         return (series, strike_f, side)
     if series == "KXWCSCORE":
         return ("KXWCSCORE", None, _parse_correct_score(sub, home, away))
+    if series in _FTS_SERIES:  # both codes ⇒ one canonical KXWCFTTS board group
+        low = sub.lower() if sub else ""
+        if low and ("no goal" in low or "no team" in low or "neither" in low or "0-0" in low):
+            return ("KXWCFTTS", None, "none")
+        return ("KXWCFTTS", None, side)
     return None
 
 
@@ -895,6 +914,38 @@ def _half_board(model, snap: MatchSnapshot, quotes: dict | None = None) -> list[
     return groups
 
 
+def _first_to_score_board(
+    model, snap: MatchSnapshot, quotes: dict | None = None,
+    history: list[MatchSnapshot] | None = None,
+) -> list[dict[str, Any]]:
+    """The KXWCFTTS "first team to score" group, priced off the backbone remaining rates
+    (competing-Poisson first passage — see modeling/first_to_score.py), model + market overlay
+    where a captured quote exists. ``history`` (the match tick stream) disambiguates a game in
+    which both teams have already scored; returns ``[]`` (refuses to price) when it can't —
+    and also once the first goal is in, since a settled market is not a projection worth
+    surfacing."""
+    fts = first_to_score(model, snap, history=history)
+    if fts.ambiguous or fts.settled:
+        return []  # nothing to project: either unresolvable or already decided
+    quotes = quotes or {}
+    home, away = snap.home_team, snap.away_team
+
+    def contract(label, prob, key):
+        bid, ask = quotes.get(key, (None, None))
+        mid = round((bid + ask) / 200.0, 4) if bid is not None and ask is not None else None
+        return {"label": label, "strike": None, "bid": bid, "ask": ask, "mid": mid,
+                "model": round(prob, 4)}
+
+    return [{
+        "series": "KXWCFTTS", "label": _SERIES_LABEL["KXWCFTTS"], "priceable": True,
+        "contracts": [
+            contract(f"{home} scores first", fts.p_home, ("KXWCFTTS", None, "home")),
+            contract(f"{away} scores first", fts.p_away, ("KXWCFTTS", None, "away")),
+            contract("No goal", fts.p_no_goal, ("KXWCFTTS", None, "none")),
+        ],
+    }]
+
+
 def build_upcoming_bundle(
     cfg: AppConfig, snap: MatchSnapshot, quote_rows: list | None = None,
 ) -> dict[str, Any]:
@@ -914,12 +965,14 @@ def build_upcoming_bundle(
     if quote_rows:
         # Off-ladder captured strikes in model-board series (e.g. Over 5.5) — model-priced.
         _append_offladder_quotes(board, quote_rows, placed_keys, M, home, away)
-        # Market-only series the model can't price (corners, first-to-score …). Scoreline,
-        # advance and half series are owned by the model boards, so exclude them here.
+        # Market-only series the model can't price (corners …). Scoreline, advance, half and
+        # first-to-score series are owned by dedicated model boards, so exclude them here.
         for g in _live_market_board(model, snap, quote_rows, home, away):
-            if g["series"] not in _MODEL_BOARD_SERIES and g["series"] not in _HALF_SERIES:
+            if (g["series"] not in _MODEL_BOARD_SERIES and g["series"] not in _HALF_SERIES
+                    and g["series"] not in _FTS_SERIES):
                 board.append(g)
     board += _half_board(model, snap, quotes)  # 1st/2nd-half result / total / BTTS
+    board += _first_to_score_board(model, snap, quotes)  # KXWCFTTS off the backbone rates
 
     ctx = snap.context
     kickoff = ctx.kickoff.isoformat() if ctx and ctx.kickoff else None
