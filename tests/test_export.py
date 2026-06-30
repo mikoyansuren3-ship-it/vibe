@@ -240,6 +240,70 @@ def test_build_upcoming_bundle_surfaces_offladder_quotes(cfg):
     assert s35["model"] is not None and t65["model"] is not None  # and a model price
 
 
+def _ko(round_label="Round of 16", home_elo=2000.0, away_elo=1760.0):
+    return MatchSnapshot(
+        match_id="ko1", provider="test", home_team="Home", away_team="Away", minute=0,
+        period=MatchPeriod.PRE, status="scheduled",
+        context=MatchContext(neutral_venue=True, home_elo=home_elo, away_elo=away_elo,
+                             round=round_label, is_knockout=True),
+    )
+
+
+def test_build_upcoming_bundle_knockout_board(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    b = build_upcoming_bundle(cfg, _ko())
+    assert b["is_knockout"] is True and b["round"] == "Round of 16"
+    assert abs(sum(b["advance"]) - 1.0) < 1e-6
+    by = {g["series"]: g for g in b["all_markets"]}
+    # Knockout markets present AND the regulation board kept (1X2 etc. settle on 90').
+    assert {"KXWCADVANCE", "KXWCMOV", "KXWCTOET", "KXWCTOPENS", "KXWCETSCORE", "KXWCGAME"} <= set(by)
+    adv = by["KXWCADVANCE"]["contracts"]
+    assert len(adv) == 2 and abs(sum(c["model"] for c in adv) - 1.0) < 1e-6
+    assert len(by["KXWCMOV"]["contracts"]) == 6  # win in reg/ET/pens per team
+    # Method of advancement (home legs) decomposes into the home advance probability.
+    home_mov = sum(c["model"] for c in by["KXWCMOV"]["contracts"][:3])
+    assert abs(home_mov - adv[0]["model"]) < 1e-3
+    # Knockout markets lead the board.
+    assert b["all_markets"][0]["series"] == "KXWCADVANCE"
+
+
+def test_build_upcoming_bundle_group_stage_has_no_knockout(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    b = build_upcoming_bundle(cfg, _pre())  # _pre has no round / is_knockout
+    assert "is_knockout" not in b and "advance" not in b
+    assert not any(g["series"] == "KXWCADVANCE" for g in b["all_markets"])
+
+
+def test_build_upcoming_bundle_advance_market_overlay(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    quotes = [("KXWCADVANCE", "adv-h", "Home advances", None, 60, 63)]
+    b = build_upcoming_bundle(cfg, _ko(round_label="Quarter-finals"), quotes)
+    by = {g["series"]: g for g in b["all_markets"]}
+    home_adv = next(c for c in by["KXWCADVANCE"]["contracts"] if c["label"] == "Home advances")
+    assert home_adv["mid"] == round((60 + 63) / 200, 4)  # captured market overlaid
+    assert home_adv["model"] is not None  # alongside the model price
+
+
+def test_build_upcoming_bundle_half_markets(cfg):
+    from wc_kalshi.backtest.export import build_upcoming_bundle
+
+    b = build_upcoming_bundle(cfg, _pre(home_elo=2000.0, away_elo=1700.0))
+    by = {g["series"]: g for g in b["all_markets"]}
+    assert {"KXWC1H", "KXWC1HTOTAL", "KXWC1HBTTS", "KXWC2H", "KXWC2HTOTAL", "KXWC2HBTTS"} <= set(by)
+    # A half result is a valid 1X2 (sums to 1).
+    assert abs(sum(c["model"] for c in by["KXWC1H"]["contracts"]) - 1.0) < 1e-6
+    # A half over-line is below the full-match one (fewer goals in a half) ...
+    h1 = next(c["model"] for c in by["KXWC1HTOTAL"]["contracts"] if c["strike"] == 0.5)
+    full = next(c["model"] for c in by["KXWCTOTAL"]["contracts"] if c["strike"] == 0.5)
+    assert h1 < full
+    # ... and the 2nd half outscores the 1st (HALF1_FRACTION < 0.5).
+    h2 = next(c["model"] for c in by["KXWC2HTOTAL"]["contracts"] if c["strike"] == 0.5)
+    assert h2 > h1
+
+
 def test_export_live_includes_upcoming(cfg, tmp_path):
     from wc_kalshi.backtest.export import export_live
     from wc_kalshi.models.db import Database

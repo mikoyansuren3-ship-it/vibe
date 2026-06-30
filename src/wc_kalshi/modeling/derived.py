@@ -60,24 +60,25 @@ def prob_team_total_over(m: np.ndarray, side: Side, line: float) -> float:
     return float(marg[k:].sum()) if k < len(marg) else 0.0
 
 
-def prob_spread(m: np.ndarray, side: Side, line: float) -> float:
-    """P(side wins by more than ``line`` goals), e.g. 'Argentina wins by more than 1.5'."""
+def supremacy_pmf(m: np.ndarray) -> dict[int, float]:
+    """P(home_goals − away_goals = d) for every margin d, as ``{d: prob}``. The full goal
+    supremacy distribution — the basis for margin / spread / Asian-handicap pricing (each is
+    a sum over the relevant margins). Generalises ``prob_margin``."""
     n_h, n_a = m.shape
-    total = 0.0
+    out: dict[int, float] = {}
     for i in range(n_h):
         for j in range(n_a):
-            margin = (i - j) if side == "home" else (j - i)
-            if margin > line:
-                total += m[i, j]
-    return float(total)
+            d = i - j
+            out[d] = out.get(d, 0.0) + float(m[i, j])
+    return out
+
+
+def prob_spread(m: np.ndarray, side: Side, line: float) -> float:
+    """P(side wins by more than ``line`` goals), e.g. 'Argentina wins by more than 1.5'."""
+    pmf = supremacy_pmf(m)
+    return float(sum(p for d, p in pmf.items() if (d if side == "home" else -d) > line))
 
 
 def prob_margin(m: np.ndarray, margin: int) -> float:
-    """P(home_score - away_score == margin) (margin may be negative = away win)."""
-    n_h, n_a = m.shape
-    total = 0.0
-    for i in range(n_h):
-        for j in range(n_a):
-            if i - j == margin:
-                total += m[i, j]
-    return float(total)
+    """P(home_score − away_score == margin) (margin may be negative = away win)."""
+    return supremacy_pmf(m).get(margin, 0.0)

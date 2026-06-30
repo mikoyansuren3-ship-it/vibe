@@ -18,7 +18,7 @@ import httpx
 
 from ...logging_setup import get_logger
 from ...models.schemas import MatchContext, MatchPeriod, MatchSnapshot, TeamStats
-from ...modeling.ratings import apply_ratings
+from ...modeling.ratings import apply_ratings, is_knockout_round
 from ..http import request_with_retry
 from .base import FootballDataProvider
 
@@ -142,6 +142,10 @@ def snapshot_from_payload(
     # Inject real pre-match priors (Elo + neutral-venue) so the LIVE model isn't a flat
     # constant. Explicit ratings on an incoming context would win; here we start fresh.
     context = apply_ratings(MatchContext(venue=venue), home_name, away_name, venue=venue)
+    # Competition round drives knockout markets (to-advance / extra time / penalties).
+    round_label = (fixture.get("league") or {}).get("round")
+    context.round = round_label
+    context.is_knockout = is_knockout_round(round_label)
 
     if (short or "").upper() in _VOID_STATUSES:
         status_str = "abandoned"  # interrupted/suspended/postponed/etc — no valid 90' result

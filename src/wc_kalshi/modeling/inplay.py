@@ -25,6 +25,7 @@ import numpy as np
 from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities, TeamStats
 from .base import ProbabilityModel
 from .intensity import credibility_weight, red_card_factors, remaining_fraction, score_state_mults
+from .intensity_profile import half_weights
 from .poisson import one_x_two, remaining_goal_matrix
 from .xg_proxy import DEFAULT_W_BIG_CHANCE, DEFAULT_W_OFF, DEFAULT_W_SOT, observed_xg
 
@@ -38,6 +39,11 @@ _ELO_TILT = 0.25  # how strongly Elo difference tilts the prior scoring split
 # when ONE side is unrated (e.g. a smaller WC nation), instead of dropping to a flat,
 # home-biased prior that badly under-rates the rated favourite. ~ a weak-side baseline.
 _DEFAULT_ELO = 1650.0
+
+# Extra-time (knockout) layer — a 30' phase conditional on the score being level at 90'.
+_ET_MINUTES = 30.0
+_ET_INTENSITY = 0.95  # mild caution/fatigue damp vs a pro-rated 90' scoring rate
+_ET_MAX_GOALS = 8
 
 
 class ModelConfigLike(Protocol):
@@ -257,3 +263,30 @@ class DixonColesInplayModel(ProbabilityModel):
         m = np.zeros((n + hs, n + as_))
         m[hs : hs + n, as_ : as_ + n] = rem  # shift remaining goals onto the current score
         return m
+
+    def scoreline_matrix_et(self, match: MatchSnapshot) -> np.ndarray:
+        """Extra-time (30') joint score matrix ``M_ET[i,j] = P(home scores i, away j in ET)``,
+        CONDITIONAL on the score being level at 90'. Uses the level-game per-minute rates
+        (game-state neutral) × 30' × a mild fatigue/caution damp, with red cards carried over
+        (a sent-off player stays off in ET). ``rho=0`` — the Dixon-Coles low-score correction
+        is a kickoff / full-time-0-0 artifact, not justified on a fresh 30' restart. Knockout
+        only; the caller composes it with the regulation matrix (see modeling/knockout.py)."""
+        h_pm, a_pm = self.level_game_per_minute_rates(match)
+        lam = h_pm * _ET_MINUTES * _ET_INTENSITY
+        mu = a_pm * _ET_MINUTES * _ET_INTENSITY
+        lam, mu = self._apply_red_cards(match, lam, mu)  # red cards carry into extra time
+        return remaining_goal_matrix(lam, mu, rho=0.0, max_goals=_ET_MAX_GOALS)
+
+    def half_scoreline_matrices(self, match: MatchSnapshot) -> tuple[np.ndarray, np.ndarray]:
+        """(M_1h, M_2h) per-half joint score matrices, splitting the full-match remaining
+        rates by the within-match intensity profile. ``conv(M_1h, M_2h)`` reconstructs the
+        full-time remaining-goal matrix (Poisson additivity), so the half markets stay
+        coherent with the full-match board. ``rho=0``: the low-score correction is a
+        full-time artifact, not a per-half one. Intended for an UPCOMING (pre-kickoff) game;
+        an in-play game would condition on the current half + score (not handled here)."""
+        lam, mu = self._remaining_rates(match)
+        w1, w2 = half_weights()
+        mg = self.cfg.max_goals
+        m1 = remaining_goal_matrix(lam * w1, mu * w1, rho=0.0, max_goals=mg)
+        m2 = remaining_goal_matrix(lam * w2, mu * w2, rho=0.0, max_goals=mg)
+        return m1, m2

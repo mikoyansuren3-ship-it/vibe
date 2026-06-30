@@ -61,6 +61,35 @@ def test_probabilities_partition():
     assert abs(hw + aw + dr - 1.0) < 1e-9
 
 
+def test_supremacy_pmf_consistent_with_margin_and_spread():
+    m = _known_matrix()
+    pmf = derived.supremacy_pmf(m)
+    assert abs(sum(pmf.values()) - 1.0) < 1e-9
+    assert abs(pmf[0] - derived.prob_margin(m, 0)) < 1e-12  # generalises prob_margin
+    assert abs(pmf[2] - m[2, 0]) < 1e-12  # only the (2,0) cell has margin +2
+    # spread is the upper tail of the supremacy distribution.
+    home_by_1plus = sum(p for d, p in pmf.items() if d > 0.5)
+    assert abs(home_by_1plus - derived.prob_spread(m, "home", 0.5)) < 1e-12
+
+
+def test_team_total_marginal_matches_clean_poisson(model_cfg, match_factory):
+    """At 0-0 the DC tau touches the joint low-score cells, yet the team marginal from M
+    stays within ~5e-4 of the clean Poisson marginal — so deriving team totals from M is
+    safe at the default draw_rho. Guards against a future large draw_rho silently distorting
+    team totals (it would fail this and prompt a dedicated marginal)."""
+    from wc_kalshi.modeling.poisson import poisson_pmf
+
+    model = DixonColesInplayModel(model_cfg)
+    match = match_factory(minute=0, home_elo=2000, away_elo=1700)
+    m = model.scoreline_matrix(match)
+    lam, mu = model._remaining_rates(match)
+    for side, rate in (("home", lam), ("away", mu)):
+        clean = np.array([poisson_pmf(rate, k) for k in range(13)])
+        for line in (0.5, 1.5, 2.5):
+            k = int(np.floor(line)) + 1
+            assert abs(derived.prob_team_total_over(m, side, line) - float(clean[k:].sum())) < 5e-4
+
+
 def test_scoreline_matrix_matches_1x2(model_cfg, match_factory):
     """The matrix collapsed to 1X2 must equal the model's own predict() 1X2."""
     model = DixonColesInplayModel(model_cfg)

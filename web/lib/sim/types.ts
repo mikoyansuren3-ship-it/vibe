@@ -57,6 +57,9 @@ export interface Bundle {
   upcoming?: boolean; // pre-kickoff projection bundle (no ticks; all_markets is model-priced)
   kickoff?: string | null; // ISO-8601 scheduled kickoff (upcoming bundles only)
   model?: [number, number, number]; // pre-match 1X2 [home, draw, away] (upcoming bundles)
+  is_knockout?: boolean; // knockout tie — to-advance / extra-time / penalty markets present
+  round?: string | null; // competition round, e.g. "Round of 16" (knockout bundles)
+  advance?: [number, number]; // P(home advances), P(away advances) incl. ET + penalties
   status?: string;
   minute?: number;
   final_score: [number, number];
