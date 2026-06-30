@@ -137,7 +137,10 @@ class EdgeSection(BaseModel):
     min_edge: float = 0.05
     min_edge_after_costs: float = 0.03
     slippage_cents: int = 1
-    devig_method: str = "proportional"
+    # Power de-vig (Vovk-Žhadanov / Clarke): assumption-light favourite-longshot correction,
+    # the right default for an exchange whose "vig" is spread+fee, not insider margin (plan
+    # P0.3). "proportional" / "shin" remain config-selectable.
+    devig_method: str = "power"
     # Market-as-prior shrinkage: blend the model with the de-vigged market via a
     # log-opinion pool, p_eff ∝ p_model**w · p_market**(1-w). 1.0 = pure model (today's
     # behaviour); <1 trusts the (sharper) market more, so we only deviate on real residual
