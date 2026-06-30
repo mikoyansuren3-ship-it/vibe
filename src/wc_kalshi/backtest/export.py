@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import REPO_ROOT, AppConfig
+from ..logging_setup import get_logger
 from ..models.db import Database
 from ..models.schemas import MatchSnapshot
 from ..modeling.derived import (
@@ -29,6 +30,8 @@ from ..modeling.derived import (
 )
 from ..modeling.inplay import DixonColesInplayModel
 from .replay import Backtester, _bucket_market_by_tick
+
+log = get_logger("backtest.export")
 
 _OUTCOMES = ("home", "draw", "away")
 
@@ -60,6 +63,18 @@ _SERIES_LABEL = {
 }
 # Series the full-match scoreline matrix can price (everything else is market-only).
 _PRICEABLE_SERIES = {"KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE"}
+
+# Series the canonical model board enumerates for an UPCOMING game (no captured Kalshi
+# contracts to mirror yet — we generate the strikes ourselves and price each off the
+# Dixon-Coles matrix). The market-only remainder (corners, halves, first-to-score …) is
+# only shown when real pre-off quotes exist.
+_MODEL_BOARD_SERIES = {"KXWCGAME", "KXWCTOTAL", "KXWCBTTS", "KXWCSPREAD", "KXWCTEAMTOTAL", "KXWCSCORE"}
+# Canonical strike ladders for the model-only board. Tune to real Kalshi WC strikes
+# when the contract conventions are confirmed (plan assumption #6).
+_UPCOMING_TOTAL_LINES = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+_UPCOMING_SPREAD_LINES = (0.5, 1.5, 2.5)
+_UPCOMING_TEAMTOTAL_LINES = (0.5, 1.5, 2.5, 3.5)
+_UPCOMING_N_SCORES = 6
 
 
 def _derived_side(sub: str | None, home: str, away: str) -> str | None:
@@ -513,7 +528,9 @@ def _live_market_board(model, last_snap, quote_rows, home, away):
     where the final-score matrix can compute it (else market-only)."""
     if not quote_rows:
         return []
-    M = model.scoreline_matrix(last_snap) if last_snap.period.is_live else None
+    # Price whenever the match isn't over — live OR a PRE (pre-kickoff) snapshot, whose
+    # matrix is the Elo-prior full-time distribution. Only a finished match has no matrix.
+    M = model.scoreline_matrix(last_snap) if not last_snap.period.is_finished else None
 
     groups: dict[str, list] = {}
     for series, ticker, sub, strike, bid, ask in quote_rows:
@@ -584,6 +601,230 @@ def build_live_bundle(
     return bundle
 
 
+def _one_x_two_from_matrix(M) -> tuple[float, float, float]:
+    """Collapse the joint final-score matrix to (home win, draw, away win)."""
+    home = draw = away = 0.0
+    for i in range(M.shape[0]):
+        for j in range(M.shape[1]):
+            v = float(M[i, j])
+            if i > j:
+                home += v
+            elif i == j:
+                draw += v
+            else:
+                away += v
+    return home, draw, away
+
+
+def _quote_key(series, sub, strike, home, away):
+    """Join key matching a captured Kalshi contract to a canonical model-board entry.
+
+    Strikes are coerced to float so an integer-typed DB strike (e.g. ``2``) still matches a
+    canonical float key (``2.0``) and never silently fails the overlay."""
+    side = _derived_side(sub, home, away)
+    strike_f = float(strike) if strike is not None else None
+    if series == "KXWCGAME":
+        if sub and ("draw" in sub.lower() or "tie" in sub.lower()):
+            return ("KXWCGAME", None, "draw")
+        return ("KXWCGAME", None, side)
+    if series in ("KXWCTOTAL", "KXWCBTTS"):
+        return (series, strike_f, None)
+    if series in ("KXWCSPREAD", "KXWCTEAMTOTAL"):
+        return (series, strike_f, side)
+    if series == "KXWCSCORE":
+        return ("KXWCSCORE", None, _parse_correct_score(sub, home, away))
+    return None
+
+
+def _quotes_by_key(quote_rows, home, away) -> dict:
+    """Index captured pre-off quotes by canonical join key → (bid, ask) cents."""
+    out: dict = {}
+    for series, _ticker, sub, strike, bid, ask in quote_rows or []:
+        if bid is None or ask is None:
+            continue
+        key = _quote_key(series, sub, strike, home, away)
+        if key is not None:
+            out.setdefault(key, (bid, ask))
+    return out
+
+
+def _model_board(
+    M, home: str, away: str, quotes: dict | None = None
+) -> tuple[list[dict[str, Any]], set]:
+    """The full canonical model board for an upcoming game, priced off the scoreline
+    matrix ``M``: 1X2, Total O/U ladder, BTTS, Spread (both sides), team totals, and the
+    top-N most likely correct scores — in the SAME group/contract shape ``_live_market_board``
+    emits. When ``quotes`` (join-key → (bid, ask)) is supplied, the matching market price is
+    attached so the frontend can show market + edge; otherwise every contract is model-only.
+
+    Returns ``(groups, placed_keys)`` — the join keys of every canonical contract, so the
+    caller can surface any captured quote whose strike/scoreline is OFF this ladder instead
+    of silently dropping it."""
+    quotes = quotes or {}
+    placed: set = set()
+
+    def contract(label, strike, model_prob, key):
+        placed.add(key)
+        bid, ask = quotes.get(key, (None, None))
+        mid = round((bid + ask) / 200.0, 4) if bid is not None and ask is not None else None
+        return {
+            "label": label,
+            "strike": strike,
+            "bid": bid,
+            "ask": ask,
+            "mid": mid,
+            "model": round(model_prob, 4) if model_prob is not None else None,
+        }
+
+    p_home, p_draw, p_away = _one_x_two_from_matrix(M)
+    groups: list[dict[str, Any]] = []
+
+    # Match result (1X2).
+    groups.append({
+        "series": "KXWCGAME", "label": _SERIES_LABEL["KXWCGAME"], "priceable": True,
+        "contracts": [
+            contract(home, None, p_home, ("KXWCGAME", None, "home")),
+            contract("Draw", None, p_draw, ("KXWCGAME", None, "draw")),
+            contract(away, None, p_away, ("KXWCGAME", None, "away")),
+        ],
+    })
+    # Total goals (Over the .5 line).
+    groups.append({
+        "series": "KXWCTOTAL", "label": _SERIES_LABEL["KXWCTOTAL"], "priceable": True,
+        "contracts": [
+            contract(f"Over {line}", line, prob_total_over(M, line), ("KXWCTOTAL", line, None))
+            for line in _UPCOMING_TOTAL_LINES
+        ],
+    })
+    # Both teams to score.
+    groups.append({
+        "series": "KXWCBTTS", "label": _SERIES_LABEL["KXWCBTTS"], "priceable": True,
+        "contracts": [contract("Both teams to score", None, prob_btts(M), ("KXWCBTTS", None, None))],
+    })
+    # Spread / handicap (each team wins by more than the line).
+    spread_contracts = []
+    for side, team in (("home", home), ("away", away)):
+        for line in _UPCOMING_SPREAD_LINES:
+            spread_contracts.append(
+                contract(f"{team} by >{line}", line, prob_spread(M, side, line),
+                         ("KXWCSPREAD", line, side))
+            )
+    groups.append({
+        "series": "KXWCSPREAD", "label": _SERIES_LABEL["KXWCSPREAD"], "priceable": True,
+        "contracts": spread_contracts,
+    })
+    # Team total goals (Over the .5 line, per team).
+    team_total_contracts = []
+    for side, team in (("home", home), ("away", away)):
+        for line in _UPCOMING_TEAMTOTAL_LINES:
+            team_total_contracts.append(
+                contract(f"{team} over {line}", line, prob_team_total_over(M, side, line),
+                         ("KXWCTEAMTOTAL", line, side))
+            )
+    groups.append({
+        "series": "KXWCTEAMTOTAL", "label": _SERIES_LABEL["KXWCTEAMTOTAL"], "priceable": True,
+        "contracts": team_total_contracts,
+    })
+    # Correct score: the N most likely exact scorelines.
+    cells = sorted(
+        (((i, j), float(M[i, j])) for i in range(M.shape[0]) for j in range(M.shape[1])),
+        key=lambda c: c[1], reverse=True,
+    )[:_UPCOMING_N_SCORES]
+    score_contracts = [
+        contract(
+            f"Draw {i}-{i}" if i == j else f"{home} {i}-{j} {away}",
+            None, prob, ("KXWCSCORE", None, (i, j)),
+        )
+        for (i, j), prob in cells
+    ]
+    groups.append({
+        "series": "KXWCSCORE", "label": _SERIES_LABEL["KXWCSCORE"], "priceable": True,
+        "contracts": score_contracts,
+    })
+    return groups, placed
+
+
+def _append_offladder_quotes(board, quote_rows, placed_keys, M, home, away) -> None:
+    """Append captured pre-off contracts for model-board series whose strike/scoreline is
+    NOT on the canonical ladder (e.g. a Kalshi "Over 5.5" or a correct-score outside the
+    top-N), model-priced from ``M`` where computable. Mutates ``board`` in place so no real
+    captured market data is hidden pre-kickoff. Non-board series (corners, halves …) are
+    handled separately by the market-only append."""
+    by_series = {g["series"]: g for g in board}
+    seen = set(placed_keys)
+    for series, _ticker, sub, strike, bid, ask in quote_rows or []:
+        if series not in _MODEL_BOARD_SERIES:
+            continue
+        key = _quote_key(series, sub, strike, home, away)
+        if key is not None:
+            if key in seen:
+                continue  # already overlaid onto a canonical contract
+            seen.add(key)
+        mid = round((bid + ask) / 200.0, 4) if bid is not None and ask is not None else None
+        mp = _market_model_prob(series, sub, strike, M, home, away) if M is not None else None
+        grp = by_series.get(series)
+        if grp is None:
+            grp = {"series": series, "label": _SERIES_LABEL.get(series, series),
+                   "priceable": series in _PRICEABLE_SERIES, "contracts": []}
+            board.append(grp)
+            by_series[series] = grp
+        grp["contracts"].append({
+            "label": sub or _SERIES_LABEL.get(series, series), "strike": strike,
+            "bid": bid, "ask": ask, "mid": mid,
+            "model": round(mp, 4) if mp is not None else None,
+        })
+
+
+def build_upcoming_bundle(
+    cfg: AppConfig, snap: MatchSnapshot, quote_rows: list | None = None,
+) -> dict[str, Any]:
+    """Projection bundle for an UPCOMING (pre-kickoff) match. Runs the model on the PRE
+    snapshot (degenerates to the Elo-only prior) and emits the full model board plus the
+    1X2 ``model`` triple and ``kickoff`` time. When ``quote_rows`` carries captured pre-off
+    Kalshi quotes, the matching market price is overlaid and any market-only series the
+    model can't price (corners, halves …) is appended. Keeps every required ``Bundle`` key
+    (empty ``ticks``, inert ``golden``/``config``) so it never breaks a replay path."""
+    model = DixonColesInplayModel(cfg.model)
+    p = model.predict(snap)
+    M = model.scoreline_matrix(snap)
+    home, away = snap.home_team, snap.away_team
+
+    quotes = _quotes_by_key(quote_rows, home, away) if quote_rows else {}
+    board, placed_keys = _model_board(M, home, away, quotes)
+    if quote_rows:
+        # Off-ladder captured strikes in model-board series (e.g. Over 5.5) — model-priced.
+        _append_offladder_quotes(board, quote_rows, placed_keys, M, home, away)
+        # Market-only series the model can't price (corners, halves, first-to-score …).
+        for g in _live_market_board(model, snap, quote_rows, home, away):
+            if g["series"] not in _MODEL_BOARD_SERIES:
+                board.append(g)
+
+    ctx = snap.context
+    kickoff = ctx.kickoff.isoformat() if ctx and ctx.kickoff else None
+    return {
+        "match_id": snap.match_id,
+        "home_team": home,
+        "away_team": away,
+        "home_elo": ctx.home_elo if ctx else None,
+        "away_elo": ctx.away_elo if ctx else None,
+        "outcome": None,
+        "upcoming": True,
+        "live": False,
+        "status": snap.status,
+        "minute": 0,
+        "kickoff": kickoff,
+        "final_score": [0, 0],
+        "model": [round(p.p_home, 4), round(p.p_draw, 4), round(p.p_away, 4)],
+        "tickers": {},
+        "preoff": {},
+        "n_ticks": 0,
+        "ticks": [],
+        "golden": {"fills": [], "n_fills": 0, "pnl": 0},
+        "config": _config_block(cfg, cfg.risk.starting_bankroll, 1.0),
+        "all_markets": board,
+    }
+
+
 def _read_all_quotes(db_path: str, match_id: str) -> list:
     """Latest [bid, ask] for EVERY captured contract of a match (all series), for the
     live 'all markets' board. Returns (series, ticker, sub, strike, bid, ask) rows."""
@@ -602,20 +843,60 @@ def _read_all_quotes(db_path: str, match_id: str) -> list:
     return rows
 
 
-def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
-    """Write ``live.json`` for EVERY currently in-progress match (or ``{live:false}``
-    if none). Read-only; no Backtester needed (the client engine bets client-side).
+async def _export_upcoming(
+    cfg: AppConfig, db_path: str, live_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Projection bundles for upcoming matches from the configured provider. Read-only:
+    no trading, no Backtester. Drops any fixture already live, kickoff-sorts the rest, and
+    joins captured pre-off Kalshi quotes when present (else model-only). Degrades to an
+    empty list if the provider is unavailable/misconfigured — upcoming is a bonus view."""
+    from ..ingestion.football.base import build_football_provider
 
-    The doc carries ``bundles`` (all live games, most-recently-updated first) plus
-    ``bundle`` (the first of those) for backward compatibility with older clients."""
+    try:
+        provider = build_football_provider(cfg)
+    except Exception as exc:  # e.g. real provider configured without an API key
+        log.warning("upcoming: provider unavailable (%s)", exc)
+        return []
+    try:
+        snaps = await provider.fetch_upcoming()
+    except Exception as exc:
+        log.warning("upcoming: fetch_upcoming failed (%s)", exc)
+        return []
+    finally:
+        try:
+            await provider.aclose()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
+
+    built: list[dict[str, Any]] = []
+    for snap in snaps:
+        if snap.match_id in live_ids:
+            continue  # already kicked off — shown in the live section instead
+        quotes = _read_all_quotes(db_path, snap.match_id)  # [] when none captured
+        built.append(build_upcoming_bundle(cfg, snap, quotes or None))
+    # Soonest kickoff first; undated fixtures sort last (stable).
+    built.sort(key=lambda b: (b.get("kickoff") is None, b.get("kickoff") or ""))
+    return built
+
+
+async def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
+    """Write ``live.json`` for EVERY currently in-progress match (or ``{live:false}``
+    if none), PLUS ``upcoming`` projection bundles for not-yet-started fixtures. Read-only;
+    no Backtester needed (the client engine bets client-side).
+
+    The doc carries ``bundles`` (all live games, most-recently-updated first), ``bundle``
+    (the first of those) for backward compatibility, and ``upcoming`` (kickoff-sorted
+    pre-match projections — present in both the live and no-live branches)."""
     src = Database(db_path if db_path.startswith("sqlite") else f"sqlite:///{db_path}")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     live: list[tuple[Any, dict[str, Any]]] = []
+    live_ids: set[str] = set()
     for mid in src.match_ids():
         snaps = src.iter_match_snapshots(mid)
         if snaps and snaps[-1].period.is_live and not snaps[-1].period.is_finished:
+            live_ids.add(mid)
             quotes = _read_all_quotes(db_path, mid)
             b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid), quotes)
             if b is not None:
@@ -625,12 +906,15 @@ def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, Any]:
     live.sort(key=lambda x: x[0], reverse=True)
     bundles = [b for _, b in live]
 
+    upcoming = await _export_upcoming(cfg, db_path, live_ids)
+
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if bundles:
         doc: dict[str, Any] = {
-            "live": True, "generated_at": generated_at, "bundles": bundles, "bundle": bundles[0],
+            "live": True, "generated_at": generated_at, "bundles": bundles,
+            "bundle": bundles[0], "upcoming": upcoming,
         }
     else:
-        doc = {"live": False, "generated_at": generated_at, "bundles": []}
+        doc = {"live": False, "generated_at": generated_at, "bundles": [], "upcoming": upcoming}
     (out / "live.json").write_text(json.dumps(doc))
     return doc

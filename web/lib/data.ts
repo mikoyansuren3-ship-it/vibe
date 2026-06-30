@@ -50,27 +50,33 @@ const LIVE_FEED_BASE =
 
 export interface LiveResult {
   bundles: Bundle[];
+  /** Pre-kickoff projection bundles (`upcoming: true`). Independent of whether any
+   * game is live — present even when `bundles` is empty. */
+  upcoming: Bundle[];
   /** epoch ms when the publisher generated the feed, or null if unknown/unreachable.
    * Used to show an honest "updated Nm ago / live feed offline" state — the Blob
    * publisher can silently go stale (e.g. a suspended store) and we must not pretend. */
   generatedAt: number | null;
 }
 
-/** Poll all in-progress matches (empty if none live). ~1-min lag by design.
- * Reads the multi-game `bundles` array, falling back to the legacy single
- * `bundle` field for older live.json payloads. */
+/** Poll all in-progress matches (empty if none live) plus upcoming projections.
+ * ~1-min lag by design. Reads the multi-game `bundles` array, falling back to the
+ * legacy single `bundle` field for older live.json payloads. */
 export async function loadLive(): Promise<LiveResult> {
   try {
     const r = await fetch(`${LIVE_FEED_BASE}/live.json?t=${Date.now()}`, { cache: "no-store" });
-    if (!r.ok) return { bundles: [], generatedAt: null };
+    if (!r.ok) return { bundles: [], upcoming: [], generatedAt: null };
     const doc = await r.json();
     const generatedAt = doc?.generated_at ? Date.parse(doc.generated_at) || null : null;
-    if (!doc || !doc.live) return { bundles: [], generatedAt };
+    // Upcoming projections survive even when nothing is live, so read them before the
+    // `!doc.live` early-out.
+    const upcoming = Array.isArray(doc?.upcoming) ? (doc.upcoming as Bundle[]) : [];
+    if (!doc || !doc.live) return { bundles: [], upcoming, generatedAt };
     const bundles = Array.isArray(doc.bundles)
       ? (doc.bundles as Bundle[])
       : doc.bundle ? [doc.bundle as Bundle] : [];
-    return { bundles, generatedAt };
+    return { bundles, upcoming, generatedAt };
   } catch {
-    return { bundles: [], generatedAt: null };
+    return { bundles: [], upcoming: [], generatedAt: null };
   }
 }

@@ -64,9 +64,9 @@ function Section({ cat, rows, adv, showGame }: { cat: DecisionCategory; rows: Ro
 }
 
 export function Bets({
-  bundles, liveBundles, liveUpdatedAt, selectedId, bankroll, kellyFraction, filters, adv,
+  bundles, liveBundles, upcomingBundles = [], liveUpdatedAt, selectedId, bankroll, kellyFraction, filters, adv,
 }: {
-  bundles: Bundle[]; liveBundles: Bundle[]; liveUpdatedAt?: number | null; selectedId: string;
+  bundles: Bundle[]; liveBundles: Bundle[]; upcomingBundles?: Bundle[]; liveUpdatedAt?: number | null; selectedId: string;
   bankroll: number; kellyFraction: number; filters: Filters; adv: boolean;
 }) {
   const [scope, setScope] = useState<"all" | "game">("all");
@@ -105,7 +105,7 @@ export function Bets({
         <div className="sub">Every bet the bot <b>took</b> (with stake &amp; return) — and every one it <b>considered</b> but skipped, grouped by why.</div>
       </div>
 
-      <LiveBets bundles={liveBundles} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} updatedAt={liveUpdatedAt} />
+      <LiveBets bundles={liveBundles} upcoming={upcomingBundles} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} updatedAt={liveUpdatedAt} />
 
       <div className="betfilters">
         <span className={`chip ${scope === "all" ? "on" : ""}`} onClick={() => setScope("all")}>All games</span>

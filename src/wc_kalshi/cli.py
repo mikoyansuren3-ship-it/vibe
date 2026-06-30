@@ -181,7 +181,7 @@ async def _cmd_export(args) -> int:
     if getattr(args, "bankroll", None) is not None:
         cfg.risk.starting_bankroll = args.bankroll
     if getattr(args, "live", False):
-        doc = export_live(cfg, args.db, args.out)
+        doc = await export_live(cfg, args.db, args.out)
         bundles = doc.get("bundles") or ([doc["bundle"]] if doc.get("bundle") else [])
         if doc.get("live") and bundles:
             print(f"live: {len(bundles)} match(es) → {args.out}/live.json")
@@ -190,6 +190,11 @@ async def _cmd_export(args) -> int:
                       f"{b['away_team']} ({b['minute']}')")
         else:
             print(f"no live match → wrote {args.out}/live.json (live:false)")
+        upcoming = doc.get("upcoming") or []
+        if upcoming:
+            print(f"upcoming: {len(upcoming)} projection(s)")
+            for b in upcoming:
+                print(f"  {b['home_team']} v {b['away_team']} (kickoff {b.get('kickoff') or 'TBD'})")
         return 0
     ids = [args.match_id] if getattr(args, "match_id", None) else None
     manifest = await export_bundles(

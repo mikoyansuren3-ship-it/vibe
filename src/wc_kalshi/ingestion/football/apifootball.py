@@ -11,6 +11,7 @@ default runtime provider is the simulator precisely so we never silently burn qu
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -174,6 +175,35 @@ def snapshot_from_payload(
     )
 
 
+def _parse_kickoff(value: Any) -> "datetime | None":
+    """Parse an API-Football ISO-8601 fixture date (e.g. '2026-06-30T18:00:00+00:00')."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def upcoming_from_payload(fixture: dict[str, Any]) -> MatchSnapshot:
+    """Build a PRE-period ``MatchSnapshot`` for an upcoming fixture (no stats yet).
+
+    Reuses ``snapshot_from_payload`` — which already injects Elo priors via
+    ``apply_ratings`` — then forces the PRE/scheduled state (a ``/fixtures?next`` entry
+    is by definition not started) and attaches the scheduled kickoff so projections can
+    be ordered and labelled. Pure: unit-tested offline against a captured payload."""
+    snap = snapshot_from_payload(fixture)
+    snap.period = MatchPeriod.PRE
+    snap.status = "scheduled"
+    snap.minute = 0
+    snap.home_score = 0
+    snap.away_score = 0
+    kickoff = _parse_kickoff((fixture.get("fixture") or {}).get("date"))
+    if snap.context is not None and kickoff is not None:
+        snap.context.kickoff = kickoff
+    return snap
+
+
 def parse_lineups(resp: list[dict[str, Any]] | None, home: str, away: str) -> dict[str, Any]:
     """Map API-Football /fixtures/lineups into {home/away: {formation, xi:[names]}}."""
     out = {"home": {"formation": None, "xi": []}, "away": {"formation": None, "xi": []}}
@@ -292,6 +322,21 @@ class APIFootballProvider(FootballDataProvider):
                 await self._apply_context(snap, fixture_id)
             snapshots.append(snap)
         return snapshots
+
+    async def fetch_upcoming(self, limit: int = 8) -> list[MatchSnapshot]:
+        """Upcoming (not-yet-started) fixtures for pre-match projection. A single
+        ``/fixtures?next=N`` request, league filtered client-side (like ``fetch_live``).
+        No statistics/lineups fetched — none exist pre-match, so no extra quota burn."""
+        params: dict[str, Any] = {"next": str(max(1, limit))}
+        if self.league_id is not None:
+            params["league"] = str(self.league_id)
+        data = await self._get("/fixtures", params)
+        fixtures = data.get("response", [])
+        if self.league_id is not None:
+            fixtures = [
+                f for f in fixtures if (f.get("league") or {}).get("id") == self.league_id
+            ]
+        return [upcoming_from_payload(f) for f in fixtures[: max(0, limit)]]
 
     async def fetch_fixture(self, match_id: str) -> MatchSnapshot | None:
         """Fetch one fixture by id in any state (used to capture the final/settled score)."""

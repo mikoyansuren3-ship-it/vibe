@@ -46,3 +46,33 @@ def test_stronger_elo_favoured_pre_match(model_cfg, match_factory):
     m = match_factory(minute=0, home_elo=2050, away_elo=1700)
     p = _model(model_cfg).predict(m)
     assert p.get(Outcome.HOME) > p.get(Outcome.AWAY)
+
+
+def test_default_config_predict_is_pinned():
+    """Golden values pin the DEFAULT-config backbone so a future intensity-engine edit
+    (modeling/intensity.py) can't silently drift it — the directional tests above wouldn't
+    catch a small regression. These are the legacy outputs; the P0.1 refactor reproduces
+    them bit-for-bit. Update ONLY with a deliberate, A/B-justified model change (plan P0.4)."""
+    from wc_kalshi.config import load_config
+    from wc_kalshi.models.schemas import MatchContext, MatchPeriod, MatchSnapshot, TeamStats
+
+    m = DixonColesInplayModel(load_config(load_env=False, use_local=False).model)
+
+    def snap(minute, hs, as_, hxg, axg, he, ae, ar=0, period=MatchPeriod.SECOND_HALF):
+        return MatchSnapshot(
+            match_id="g", provider="x", home_team="H", away_team="A", minute=minute,
+            period=period, home_score=hs, away_score=as_,
+            home=TeamStats(xg=hxg), away=TeamStats(xg=axg, red_cards=ar),
+            context=MatchContext(home_elo=he, away_elo=ae),
+        )
+
+    cases = [
+        (snap(30, 1, 0, 1.1, 0.4, 1900, 1750), (0.7904, 0.1510, 0.0586)),
+        (snap(0, 0, 0, None, None, 2050, 1700, period=MatchPeriod.PRE), (0.7947, 0.1401, 0.0652)),
+        (snap(70, 0, 1, 0.5, 1.4, 1800, 1850, ar=1), (0.0657, 0.2569, 0.6774)),
+    ]
+    for s, (gh, gd, ga) in cases:
+        p = m.predict(s)
+        assert abs(p.p_home - gh) < 1e-4, (p.p_home, gh)
+        assert abs(p.p_draw - gd) < 1e-4, (p.p_draw, gd)
+        assert abs(p.p_away - ga) < 1e-4, (p.p_away, ga)

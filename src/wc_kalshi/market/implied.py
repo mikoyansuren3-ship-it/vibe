@@ -114,6 +114,23 @@ _METHODS = {
 }
 
 
+def implied_two_way(yes_bid: int | None, yes_ask: int | None) -> tuple[float | None, float]:
+    """Fair probability + exact overround for a BINARY (Yes/No) market from its two-sided
+    book — for derived O/U, BTTS, and knockout "to advance" contracts (plan P0.3).
+
+    The No book mirrors the Yes book (``no_ask = 100 − yes_bid``), so the Yes mid is already
+    the fair probability — the overround lives entirely in the SPREAD (the cost of crossing),
+    not in the mid. The tradeable pair (``yes_ask`` to back, ``no_ask = 100 − yes_bid`` to lay)
+    sums to ``100 + spread``, i.e. overround ``= 1 + spread/100``; a Yes-only mid would
+    understate it. Returns ``(fair_prob, overround)``; ``fair_prob`` is None for a one-sided book.
+    """
+    if yes_bid is None or yes_ask is None:
+        return None, 1.0
+    fair = (yes_bid + yes_ask) / 200.0
+    overround = 1.0 + (yes_ask - yes_bid) / 100.0
+    return fair, overround
+
+
 def implied_from_markets(
     snapshots: list[MarketSnapshot],
     *,

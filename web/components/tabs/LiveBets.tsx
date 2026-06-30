@@ -11,7 +11,7 @@ import { evaluateTick } from "../../lib/sim/policy";
 import { evalContract } from "../../lib/sim/markets";
 import { outcomeName, OUT_HEX } from "../../lib/format";
 import type { Bundle, Filters, LiveContract, OutcomeKey } from "../../lib/sim/types";
-import { cls, pct, signed } from "../bits";
+import { cls, DualBars, pct, signed } from "../bits";
 
 const sMoney = (x: number) => (x >= 0 ? "+" : "−") + "$" + Math.abs(x).toFixed(2);
 const OUTS: OutcomeKey[] = ["home", "draw", "away"];
@@ -191,13 +191,62 @@ function freshness(updatedAt?: number | null): { text: string; stale: boolean } 
   return { text: mins <= 0 ? "updated just now" : `updated ${mins}m ago`, stale: false };
 }
 
-export function LiveBets({ bundles, bankroll, kellyFraction, filters, updatedAt }: {
-  bundles: Bundle[]; bankroll: number; kellyFraction: number; filters: Filters; updatedAt?: number | null;
+function kickoffLabel(iso?: string | null): string {
+  if (!iso) return "kickoff TBD";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "kickoff TBD";
+  const mins = Math.round((t - Date.now()) / 60000);
+  if (mins <= 0) return "kicking off";
+  if (mins < 60) return `kickoff in ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `kickoff in ${hrs}h ${mins % 60}m`;
+  return `kickoff in ${Math.floor(hrs / 24)}d ${hrs % 24}h`;
+}
+
+// A future game projected as a big rectangle: the 1X2 headline (model bars, with the
+// market overlaid when a pre-off Kalshi market is open) plus every model-priced market's
+// probability. Read-only — the bot trades nothing before kickoff.
+function UpcomingGame({ bundle }: { bundle: Bundle }) {
+  const groups = bundle.all_markets ?? [];
+  const game = groups.find((g) => g.series === "KXWCGAME");
+  const rest = groups.filter((g) => g.series !== "KXWCGAME");
+  const model: [number, number, number] = bundle.model ?? [
+    game?.contracts[0]?.model ?? 0, game?.contracts[1]?.model ?? 0, game?.contracts[2]?.model ?? 0,
+  ];
+  const market: [number | null, number | null, number | null] = [
+    game?.contracts[0]?.mid ?? null, game?.contracts[1]?.mid ?? null, game?.contracts[2]?.mid ?? null,
+  ];
+  const hasMarket = market.some((m) => m != null);
+  return (
+    <div className="panel bigrect">
+      <div className="rect-head">
+        <span className="livedot" style={{ background: "var(--accent)" }} />
+        <span className="rect-teams">
+          {bundle.home_team} <span style={{ color: "var(--faint)", fontWeight: 400 }}>vs</span> {bundle.away_team}
+        </span>
+        {bundle.home_elo != null && bundle.away_elo != null && (
+          <span className="rect-elo mono">Elo {Math.round(bundle.home_elo)}–{Math.round(bundle.away_elo)}</span>
+        )}
+        <span className="rect-kick mono">{kickoffLabel(bundle.kickoff)}</span>
+      </div>
+      <DualBars labels={[bundle.home_team, "Draw", bundle.away_team]} model={model} market={market} showEdge={hasMarket} />
+      {rest.map((g) => (
+        <Group key={g.series} title={g.label}
+          sub={hasMarket ? "model probability vs market — projection only" : "model probability — no market open yet"}
+          lines={g.contracts.map((c) => contractToLine(c, bundle.config))} />
+      ))}
+    </div>
+  );
+}
+
+export function LiveBets({ bundles, upcoming = [], bankroll, kellyFraction, filters, updatedAt }: {
+  bundles: Bundle[]; upcoming?: Bundle[]; bankroll: number; kellyFraction: number; filters: Filters; updatedAt?: number | null;
 }) {
   const fresh = freshness(updatedAt);
+  const hasLive = bundles.length > 0;
   // No live games is normal; only flag the feed as offline when we couldn't even reach
   // the publisher (updatedAt === null) — never pretend a stale/suspended feed is live.
-  if (bundles.length === 0) {
+  if (!hasLive && upcoming.length === 0) {
     if (updatedAt == null) {
       return (
         <div className="note" style={{ marginBottom: 18 }}>
@@ -208,18 +257,31 @@ export function LiveBets({ bundles, bankroll, kellyFraction, filters, updatedAt 
     return null;
   }
   return (
-    <div style={{ marginBottom: 26 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}>
-        <h2 style={{ margin: 0, fontSize: 17 }}>Live now</h2>
-        <span className="note" style={{ margin: 0 }}>{bundles.length} game{bundles.length > 1 ? "s" : ""} in progress — every Kalshi contract, even the ones the bot ignores.</span>
-        <span className="mono" title="how fresh the live feed is (published on a ~60s timer)"
-          style={{ marginLeft: "auto", fontSize: 11, color: fresh.stale ? "var(--red)" : "var(--muted)" }}>
-          {fresh.text}
-        </span>
-      </div>
-      {bundles.map((b) => (
-        <LiveGame key={b.match_id} bundle={b} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} />
-      ))}
-    </div>
+    <>
+      {hasLive && (
+        <div style={{ marginBottom: 26 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Live now</h2>
+            <span className="note" style={{ margin: 0 }}>{bundles.length} game{bundles.length > 1 ? "s" : ""} in progress — every Kalshi contract, even the ones the bot ignores.</span>
+            <span className="mono" title="how fresh the live feed is (published on a ~60s timer)"
+              style={{ marginLeft: "auto", fontSize: 11, color: fresh.stale ? "var(--red)" : "var(--muted)" }}>
+              {fresh.text}
+            </span>
+          </div>
+          {bundles.map((b) => (
+            <LiveGame key={b.match_id} bundle={b} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} />
+          ))}
+        </div>
+      )}
+      {upcoming.length > 0 && (
+        <div style={{ marginBottom: 26 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px" }}>
+            <h2 style={{ margin: 0, fontSize: 17 }}>Upcoming</h2>
+            <span className="note" style={{ margin: 0 }}>{upcoming.length} game{upcoming.length > 1 ? "s" : ""} — projected probability of every bet, before kickoff.</span>
+          </div>
+          {upcoming.map((b) => <UpcomingGame key={b.match_id} bundle={b} />)}
+        </div>
+      )}
+    </>
   );
 }

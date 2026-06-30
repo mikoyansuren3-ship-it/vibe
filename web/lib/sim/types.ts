@@ -54,6 +54,9 @@ export interface Bundle {
   away_elo: number | null;
   outcome: FinalOutcome | null; // null while the match is still in progress (live)
   live?: boolean;
+  upcoming?: boolean; // pre-kickoff projection bundle (no ticks; all_markets is model-priced)
+  kickoff?: string | null; // ISO-8601 scheduled kickoff (upcoming bundles only)
+  model?: [number, number, number]; // pre-match 1X2 [home, draw, away] (upcoming bundles)
   status?: string;
   minute?: number;
   final_score: [number, number];

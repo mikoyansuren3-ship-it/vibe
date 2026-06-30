@@ -117,6 +117,14 @@ class ModelSection(BaseModel):
     elo_tilt: float = 0.3  # how strongly Elo diff tilts the prior scoring split
     leader_mult: float = 0.92  # remaining-rate multiplier for the team that's ahead
     chaser_mult: float = 1.1  # remaining-rate multiplier for the team that's behind
+    # Intensity-engine upgrades (modeling/intensity.py, plan P0.1). Every default below
+    # REPRODUCES the prior behaviour exactly; they only take effect once fit (P0.4) and an
+    # A/B confirms the gain, so the live model never changes silently.
+    goal_time_slope: float = 0.0  # 0 = flat profile; (0,1) makes goals arrive later
+    score_state_per_goal: float = 0.0  # 0 = flat leader/chaser; >0 grades by lead size
+    xg_blend_mode: str = "linear"  # "linear" (elapsed/90 weight) | "credibility" (X/(X+k))
+    xg_info_k: float = 1.3  # credibility prior strength in xG units (xg_blend_mode=credibility)
+    red_card_opponent_boost: float | None = None  # None = legacy symmetric 1+(1-penalty)
     # Shot-based xG proxy (modeling/xg_proxy.py) — used when the provider omits live
     # xG (API-Football's in-play WC feed has no expected_goals). Fitted by least
     # squares on 128 StatsBomb WC matches (see scripts/fit_xg_proxy.py).
@@ -129,7 +137,10 @@ class EdgeSection(BaseModel):
     min_edge: float = 0.05
     min_edge_after_costs: float = 0.03
     slippage_cents: int = 1
-    devig_method: str = "proportional"
+    # Power de-vig (Vovk-Žhadanov / Clarke): assumption-light favourite-longshot correction,
+    # the right default for an exchange whose "vig" is spread+fee, not insider margin (plan
+    # P0.3). "proportional" / "shin" remain config-selectable.
+    devig_method: str = "power"
     # Market-as-prior shrinkage: blend the model with the de-vigged market via a
     # log-opinion pool, p_eff ∝ p_model**w · p_market**(1-w). 1.0 = pure model (today's
     # behaviour); <1 trusts the (sharper) market more, so we only deviate on real residual

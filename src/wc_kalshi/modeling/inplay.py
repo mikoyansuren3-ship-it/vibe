@@ -18,10 +18,13 @@ to 1) is what the unit tests pin down.
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import numpy as np
 
 from ..models.schemas import MatchPeriod, MatchSnapshot, Probabilities, TeamStats
 from .base import ProbabilityModel
+from .intensity import credibility_weight, red_card_factors, remaining_fraction, score_state_mults
 from .poisson import one_x_two, remaining_goal_matrix
 from .xg_proxy import DEFAULT_W_BIG_CHANCE, DEFAULT_W_OFF, DEFAULT_W_SOT, observed_xg
 
@@ -37,9 +40,10 @@ _ELO_TILT = 0.25  # how strongly Elo difference tilts the prior scoring split
 _DEFAULT_ELO = 1650.0
 
 
-class ModelConfigLike:
-    """Duck-typed config (so the model can be built from the pydantic ModelSection
-    or a plain object in tests)."""
+class ModelConfigLike(Protocol):
+    """Structural config protocol (so the model accepts the pydantic ModelSection or a
+    plain object in tests). A Protocol — not a base class — so ModelSection satisfies it
+    by shape without inheriting; behavioural knobs below are read via getattr defaults."""
 
     base_home_xg: float
     base_away_xg: float
@@ -62,6 +66,13 @@ class DixonColesInplayModel(ProbabilityModel):
         self.elo_tilt = float(getattr(cfg, "elo_tilt", _ELO_TILT))
         self.leader_mult = float(getattr(cfg, "leader_mult", _LEADER_MULT))
         self.chaser_mult = float(getattr(cfg, "chaser_mult", _CHASER_MULT))
+        # Intensity-engine knobs (intensity.py). Defaults reproduce legacy behaviour, so a
+        # duck-typed test config that omits them is unchanged.
+        self.goal_time_slope = float(getattr(cfg, "goal_time_slope", 0.0))
+        self.score_state_per_goal = float(getattr(cfg, "score_state_per_goal", 0.0))
+        self.xg_blend_mode = str(getattr(cfg, "xg_blend_mode", "linear"))
+        self.xg_info_k = float(getattr(cfg, "xg_info_k", 1.3))
+        self.red_card_opponent_boost = getattr(cfg, "red_card_opponent_boost", None)
 
     # -- priors ---------------------------------------------------------- #
     def _prior_full_rates(self, match: MatchSnapshot) -> tuple[float, float]:
@@ -100,58 +111,79 @@ class DixonColesInplayModel(ProbabilityModel):
         )
 
     # -- remaining-rate projection --------------------------------------- #
-    def _remaining_rates(self, match: MatchSnapshot) -> tuple[float, float]:
-        elapsed = min(max(match.minute, 0), 90)
-        rem_min = max(0.0, 90.0 - elapsed)
+    def _blended_per_minute_rates(self, match: MatchSnapshot, elapsed: int) -> tuple[float, float]:
+        """Blended (Elo prior + live-xG) per-minute scoring rates, BEFORE the time
+        profile, red cards and game-state multipliers. Shared by the 1X2 head and the
+        extra-time / first-to-score / team-total heads that need clean per-minute rates.
+
+        When the provider supplies no xG (API-Football's in-play WC feed) it's reconstructed
+        from shots; when even that is unavailable we fall back to the prior PER SIDE, so a
+        missing signal never masquerades as "zero chances created" (over-rating the draw).
+        """
         home_full, away_full = self._prior_full_rates(match)
         prior_h_pm = home_full / 90.0
         prior_a_pm = away_full / 90.0
 
-        # Observed scoring rate from live xG. When the provider supplies no xG (e.g.
-        # API-Football's in-play WC feed) we reconstruct it from shots; when even that
-        # is unavailable we fall back to the prior PER SIDE, so a missing signal never
-        # masquerades as "zero chances created" (which would over-rate the draw).
         obs_h = self._observed_xg(match.home) if elapsed >= 1 else None
         obs_a = self._observed_xg(match.away) if elapsed >= 1 else None
         obs_h_pm = obs_h / elapsed if obs_h is not None else prior_h_pm
         obs_a_pm = obs_a / elapsed if obs_a is not None else prior_a_pm
 
-        # Live weight grows with minutes played, capped by config.
-        w = self.cfg.live_xg_weight * (elapsed / 90.0)
-        h_pm = (1 - w) * prior_h_pm + w * obs_h_pm
-        a_pm = (1 - w) * prior_a_pm + w * obs_a_pm
+        if self.xg_blend_mode == "credibility":
+            # Info-weighted: trust live xG in proportion to how much has accumulated.
+            w_h = credibility_weight(obs_h or 0.0, self.xg_info_k)
+            w_a = credibility_weight(obs_a or 0.0, self.xg_info_k)
+        else:  # legacy: a single elapsed-driven weight shared by both sides.
+            w_h = w_a = self.cfg.live_xg_weight * (elapsed / 90.0)
 
-        lam = h_pm * rem_min
-        mu = a_pm * rem_min
+        h_pm = (1 - w_h) * prior_h_pm + w_h * obs_h_pm
+        a_pm = (1 - w_a) * prior_a_pm + w_a * obs_a_pm
+        return h_pm, a_pm
+
+    def _remaining_rates(self, match: MatchSnapshot) -> tuple[float, float]:
+        elapsed = min(max(match.minute, 0), 90)
+        h_pm, a_pm = self._blended_per_minute_rates(match, elapsed)
+
+        # Time-inhomogeneous profile: full-match expected goals × fraction still to come.
+        # goal_time_slope=0 reproduces the legacy flat (90-elapsed) projection exactly.
+        f_rem = remaining_fraction(elapsed, self.goal_time_slope)
+        lam = h_pm * 90.0 * f_rem
+        mu = a_pm * 90.0 * f_rem
 
         lam, mu = self._apply_red_cards(match, lam, mu)
         lam, mu = self._apply_game_state(match, lam, mu)
         return lam, mu
 
+    def level_game_per_minute_rates(self, match: MatchSnapshot) -> tuple[float, float]:
+        """Per-minute scoring rates with the game-state multiplier neutral (score treated as
+        level) — the clean conditional rates a FUTURE extra-time / first-to-score / team-total
+        head will need (none exist yet; reserved hook, plan P0.1). The caller scales by the
+        phase duration and applies red cards itself (red cards carry into extra time)."""
+        elapsed = min(max(match.minute, 0), 90)
+        return self._blended_per_minute_rates(match, elapsed)
+
     def _apply_red_cards(
         self, match: MatchSnapshot, lam: float, mu: float
     ) -> tuple[float, float]:
-        p = self.cfg.red_card_xg_penalty
-        boost = 1.0 + (1.0 - p)  # symmetric opponent boost
+        own, boost = red_card_factors(self.cfg.red_card_xg_penalty, self.red_card_opponent_boost)
         if match.home.red_cards:
-            lam *= p**match.home.red_cards
+            lam *= own**match.home.red_cards
             mu *= boost**match.home.red_cards
         if match.away.red_cards:
-            mu *= p**match.away.red_cards
+            mu *= own**match.away.red_cards
             lam *= boost**match.away.red_cards
         return lam, mu
 
     def _apply_game_state(
         self, match: MatchSnapshot, lam: float, mu: float
     ) -> tuple[float, float]:
-        diff = match.score_diff
-        if diff > 0:  # home leading
-            lam *= self.leader_mult
-            mu *= self.chaser_mult
-        elif diff < 0:  # away leading
-            mu *= self.leader_mult
-            lam *= self.chaser_mult
-        return lam, mu
+        home_mult, away_mult = score_state_mults(
+            match.score_diff,
+            leader_mult=self.leader_mult,
+            chaser_mult=self.chaser_mult,
+            per_goal=self.score_state_per_goal,
+        )
+        return lam * home_mult, mu * away_mult
 
     def _effective_rho(self, match: MatchSnapshot) -> float:
         """Effective Dixon-Coles rho applied to the REMAINING-goal matrix.
