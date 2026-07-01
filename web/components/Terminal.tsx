@@ -33,17 +33,31 @@ export function Terminal({
   const result = useMemo(() => runBundle(bundle, { bankroll, kellyFraction, filters }), [bundle, bankroll, kellyFraction, filters]);
   const goals = useMemo(() => goalMinutes(bundle), [bundle]);
   const n = bundle.ticks.length;
-  const [idx, setIdx] = useState(0);
+  // A LIVE game opens at the latest tick (the current minute), not the first captured one:
+  // the recorder can join mid-match, so tick 0 may be e.g. 30' while the game is at 56'. A
+  // settled/upcoming replay opens at kickoff so it can be watched through from the start.
+  const [idx, setIdx] = useState(live ? Math.max(0, n - 1) : 0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(16);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const followLive = useRef(!!live); // parked at the live edge → track new ticks on refresh
 
-  useEffect(() => { setIdx(0); setPlaying(false); }, [bundle.match_id]);
+  useEffect(() => {
+    followLive.current = !!live;
+    setIdx(live ? bundle.ticks.length - 1 : 0);
+    setPlaying(false);
+  }, [bundle.match_id, live]);
+  // The live feed refreshes every ~45s (new ticks, same match_id). If the viewer is parked at
+  // the live edge, advance to the new latest tick so the replay tracks the game; if they've
+  // scrubbed back to watch from earlier, leave the playhead where they put it.
+  useEffect(() => {
+    if (live && followLive.current) setIdx(bundle.ticks.length - 1);
+  }, [bundle.ticks.length, live]);
   useEffect(() => {
     if (timer.current) clearInterval(timer.current);
     if (!playing) return;
     timer.current = setInterval(() => {
-      setIdx((i) => { if (i >= n - 1) { setPlaying(false); return i; } return Math.min(n - 1, i + Math.max(1, Math.round(speed / 4))); });
+      setIdx((i) => { if (i >= n - 1) { setPlaying(false); followLive.current = true; return i; } return Math.min(n - 1, i + Math.max(1, Math.round(speed / 4))); });
     }, 1000 / Math.min(speed, 16));
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [playing, speed, n]);
@@ -73,7 +87,7 @@ export function Terminal({
 
       <div className="controls">
         <button className="primary" onClick={() => setPlaying((p) => !p)}>{playing ? "❚❚" : "▶"}</button>
-        <button onClick={() => { setPlaying(false); setIdx(0); }}>↺</button>
+        <button onClick={() => { setPlaying(false); setIdx(0); followLive.current = false; }}>↺</button>
         <div className="timeline">
           <div className="track"><div className="played" style={{ width: `${playedFrac}%` }} /></div>
           {goals.map((g, i) => (
@@ -82,7 +96,7 @@ export function Terminal({
           {result.fills.map((f, i) => (
             <span key={`f${i}`} className={`marker fill ${f.action}`} style={{ left: `${Math.min(100, (f.minute / 90) * 100)}%` }} title={`${f.action} ${f.outcome} ${f.minute}'`} />
           ))}
-          <input type="range" min={0} max={n - 1} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} />
+          <input type="range" min={0} max={n - 1} value={idx} onChange={(e) => { setPlaying(false); const v = Number(e.target.value); setIdx(v); followLive.current = v >= n - 1; }} />
         </div>
         <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}>
           {SPEEDS.map((s) => <option key={s} value={s}>{s}×</option>)}
