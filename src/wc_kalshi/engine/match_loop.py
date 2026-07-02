@@ -227,6 +227,7 @@ class TickProcessor:
             snap=snap,
             persist=self.persist,
             minute=match.minute,
+            risk_check=True,  # re-checked under the lock; the rd above is advisory
         )
         mstate.n_orders += 1
         if n_fills:

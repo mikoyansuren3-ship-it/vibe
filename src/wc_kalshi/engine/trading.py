@@ -15,7 +15,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..eventbus import Event, EventType
-from ..execution.base import OrderRequest
+from ..execution.base import OrderRequest, OrderResult, OrderStatus
 from ..models.schemas import (
     EdgeSignal,
     MarketSnapshot,
@@ -159,25 +159,49 @@ async def place_and_book(
     snap: MarketSnapshot | None,
     persist: bool = True,
     minute: int | None = None,
+    risk_check: bool = False,
 ) -> tuple[Any, int]:
     """Place an order and book any fills into portfolio + risk. Returns (result, n_fills).
 
     ``snap`` is the latest MARKET snapshot (used to model the fill); ``minute`` is the
     match minute, recorded for CLV/diagnostics.
+
+    ``risk_check=True`` re-runs ``pre_trade_check`` UNDER the lock — the authoritative
+    gate. A caller's earlier check is only advisory: matches are processed concurrently,
+    so between that check and lock acquisition another task can book fills that change
+    exposure, and two stale approvals could jointly breach the caps. Deliberately False
+    for flatten/position-stop closes, which reduce exposure and must not be blocked.
     """
-    order = OrderRequest(
-        match_id=match_id,
-        market_ticker=market_ticker,
-        outcome=outcome,
-        action=action,
-        contracts=contracts,
-        limit_price_cents=limit_price_cents,
-        cost_per_contract=cost_per_contract,
-        time_in_force=rt.cfg.execution.order_time_in_force,
-        client_order_id=coid,
-    )
     n_fills = 0
     async with rt.trade_lock:
+        if risk_check:
+            rd = rt.risk.pre_trade_check(
+                match_id=match_id,
+                market_ticker=market_ticker,
+                action=action,
+                contracts=contracts,
+                cost_per_contract=cost_per_contract,
+                price=limit_price_cents / 100.0,
+            )
+            if not rd.approved:
+                if persist:
+                    rt.audit.guardrail(
+                        f"blocked at execution: {rd.reason}",
+                        match_id=match_id, market_ticker=market_ticker,
+                    )
+                return OrderResult(coid, OrderStatus.REJECTED, message=f"risk: {rd.reason}"), 0
+            contracts = rd.contracts  # may be clamped tighter than the caller's check saw
+        order = OrderRequest(
+            match_id=match_id,
+            market_ticker=market_ticker,
+            outcome=outcome,
+            action=action,
+            contracts=contracts,
+            limit_price_cents=limit_price_cents,
+            cost_per_contract=cost_per_contract,
+            time_in_force=rt.cfg.execution.order_time_in_force,
+            client_order_id=coid,
+        )
         result = await rt.executor.place(order, snap)
         if persist:
             _persist_order(rt, order, result)
@@ -276,6 +300,7 @@ async def execute_proposal(
         snap=snap,
         persist=persist,
         minute=p.minute,
+        risk_check=True,  # re-checked under the lock; the rd above is advisory
     )
     if result.is_filled:
         p.status = ProposalStatus.EXECUTED
