@@ -103,6 +103,76 @@ def _persist_match(db, mid, snaps, markets):
         db.add_market_snapshot(m)
 
 
+def _engineered_bet_match(db, match_id, *, home_final, away_final):
+    """A settled match where the strategy reliably backs Home at 42c (model strongly
+    favours Home via a 2100-v-1500 Elo gap): the final score decides the bet's P&L."""
+    def snap(minute, period, hs, as_, *, ts, status="live"):
+        m = _match(minute, period, hs, as_, ts=ts, status=status)
+        m.match_id = match_id
+        m.context.home_elo, m.context.away_elo = 2100.0, 1500.0
+        return m
+
+    db.add_match_snapshot(snap(5, MatchPeriod.FIRST_HALF, 0, 0, ts=T0))
+    db.add_match_snapshot(snap(
+        90, MatchPeriod.FULL_TIME, home_final, away_final,
+        ts=T0 + timedelta(minutes=90), status="finished",
+    ))
+    for outcome, suffix, bid, ask in (
+        (Outcome.HOME, "H", 40, 42), (Outcome.DRAW, "D", 28, 30), (Outcome.AWAY, "A", 28, 30),
+    ):
+        m = _mkt(outcome, f"{match_id}-{suffix}", bid, ask, ts=T0 + timedelta(seconds=1))
+        m.match_id = match_id
+        db.add_market_snapshot(m)
+
+
+def test_export_attributes_pnl_to_the_right_match(cfg, tmp_path):
+    """Bundle P&L must come from the replay's match-KEYED results — the old positional
+    zip shifted every match's P&L when the id sets drifted between the two scans."""
+    from wc_kalshi.backtest.export import export_bundles
+    from wc_kalshi.models.db import Database
+
+    db_path = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_path)
+    _engineered_bet_match(db, "m_lose", home_final=0, away_final=1)  # Home bet loses
+    _engineered_bet_match(db, "m_win", home_final=2, away_final=0)  # Home bet pays
+
+    doc = asyncio.run(export_bundles(cfg, db_path, str(tmp_path / "out")))
+    pnl = {
+        m["match_id"]: json.loads((tmp_path / "out" / f"{m['match_id']}.json").read_text())["golden"]["pnl"]
+        for m in doc["matches"]
+    }
+    assert pnl["m_win"] > 0 and pnl["m_lose"] < 0
+
+
+def test_export_attribution_survives_id_order_drift(cfg, tmp_path, monkeypatch):
+    """The review's failure mode: match_ids() returns a different order between the
+    replay's scan and any later scan (Postgres DISTINCT instability, or the recorder
+    settling a match mid-export). Attribution must not depend on that order."""
+    from wc_kalshi.backtest.export import export_bundles
+    from wc_kalshi.models.db import Database
+
+    db_path = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_path)
+    _engineered_bet_match(db, "m_lose", home_final=0, away_final=1)
+    _engineered_bet_match(db, "m_win", home_final=2, away_final=0)
+
+    real = Database.match_ids
+    calls = {"n": 0}
+
+    def drifting(self):
+        calls["n"] += 1
+        ids = real(self)
+        return ids if calls["n"] % 2 else list(reversed(ids))
+
+    monkeypatch.setattr(Database, "match_ids", drifting)
+    doc = asyncio.run(export_bundles(cfg, db_path, str(tmp_path / "out2")))
+    pnl = {
+        m["match_id"]: json.loads((tmp_path / "out2" / f"{m['match_id']}.json").read_text())["golden"]["pnl"]
+        for m in doc["matches"]
+    }
+    assert pnl["m_win"] > 0 and pnl["m_lose"] < 0
+
+
 def test_export_live_emits_all_live_matches(cfg, tmp_path):
     from wc_kalshi.backtest.export import export_live
     from wc_kalshi.models.db import Database

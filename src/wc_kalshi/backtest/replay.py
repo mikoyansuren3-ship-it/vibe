@@ -130,6 +130,12 @@ class BacktestResult:
     starting_bankroll: float = 0.0
     ending_equity: float = 0.0
     per_match_pnl: list[float] = field(default_factory=list)
+    # Same deltas KEYED by match_id. Consumers attributing P&L to a specific match
+    # (export_bundles) must use this, never positional alignment: the bare list's
+    # order is an artifact of the replay's own id scan, and zipping it against an
+    # independently recomputed id list misattributes P&L the moment the DB grew
+    # (or the backend returns DISTINCT in a different order) between the two scans.
+    pnl_by_match: dict[str, float] = field(default_factory=dict)
     equity_curve: list[float] = field(default_factory=list)
     calibration: dict[str, float] = field(default_factory=dict)
     reliability: list[dict[str, float]] = field(default_factory=list)
@@ -396,6 +402,7 @@ class Backtester:
         equity_curve: list[float] = []
         n_fills = 0
         prev_realized = 0.0
+        pnl_by_match: dict[str, float] = {}
         for i in range(n_matches):
             seed = seed0 + i
             snaps = simulate_full_match(
@@ -405,9 +412,11 @@ class Backtester:
             delta = rt.portfolio.realized_pnl - prev_realized
             prev_realized = rt.portfolio.realized_pnl
             per_match.append(delta)
+            pnl_by_match[f"bt-{seed}"] = delta
             equity_curve.append(rt.portfolio.equity(rt.last_mids))
         result = self._collect(per_match, equity_curve)
         result.n_fills = n_fills
+        result.pnl_by_match = pnl_by_match
         result.data_source = DataSource.SYNTHETIC
         return result
 
@@ -422,6 +431,7 @@ class Backtester:
         self.rt.risk.limits.max_daily_loss = 1e12
         ids = match_ids or source_db.match_ids()
         per_match: list[float] = []
+        pnl_by_match: dict[str, float] = {}
         equity_curve: list[float] = []
         n_fills = 0
         n_skipped = 0
@@ -451,9 +461,11 @@ class Backtester:
             delta = self.rt.portfolio.realized_pnl - prev_realized
             prev_realized = self.rt.portfolio.realized_pnl
             per_match.append(delta)
+            pnl_by_match[match_id] = delta
             equity_curve.append(self.rt.portfolio.equity(self.rt.last_mids))
         result = self._collect(per_match, equity_curve)
         result.n_fills = n_fills
+        result.pnl_by_match = pnl_by_match
         result.data_source = DataSource.KALSHI_REPLAY
         return result
 
@@ -475,6 +487,7 @@ class Backtester:
                 "(model accuracy on real outcomes); market edge cannot be measured."
             )
         per_match: list[float] = []
+        pnl_by_match: dict[str, float] = {}
         equity_curve: list[float] = []
         n_fills = 0
         prev_realized = 0.0
@@ -494,9 +507,11 @@ class Backtester:
             delta = rt.portfolio.realized_pnl - prev_realized
             prev_realized = rt.portfolio.realized_pnl
             per_match.append(delta)
+            pnl_by_match[st.match_id] = delta
             equity_curve.append(rt.portfolio.equity(rt.last_mids))
         result = self._collect(per_match, equity_curve)
         result.n_fills = n_fills
+        result.pnl_by_match = pnl_by_match
         result.data_source = (
             DataSource.BETFAIR_EDGE if has_market_data(matches) else DataSource.STATSBOMB_CALIBRATION
         )

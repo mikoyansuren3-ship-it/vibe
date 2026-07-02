@@ -423,13 +423,15 @@ async def export_bundles(
     rt = bt.rt
     kelly_factor = float(result.calibration.get("calibration_factor", 1.0))
 
-    # Group golden fills by match and align per-match P&L to the settled order.
+    # Group golden fills by match. P&L comes match-KEYED from the replay itself:
+    # the replay's own settled set is authoritative, so bundles can never disagree
+    # with it (a positional zip against a recomputed id list misattributed P&L
+    # whenever a match settled between the two scans, e.g. under the live recorder).
     fills_by_match: dict[str, list[dict]] = {}
     for f in rt.fills_log:
         fills_by_match.setdefault(f["match_id"], []).append(f)
-    ids = match_ids or src.match_ids()
-    settled_ids = [m for m in ids if any(s.period.is_finished for s in src.iter_match_snapshots(m))]
-    pnl_by_match = dict(zip(settled_ids, result.per_match_pnl))
+    pnl_by_match = result.pnl_by_match
+    settled_ids = list(pnl_by_match)
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
