@@ -55,8 +55,14 @@ def snapshot_from_match(match: dict[str, Any], stats: dict[str, Any] | None = No
     home = TeamStats()
     away = TeamStats()
     s = stats or match.get("stats") or {}
-    home.xg = _num((s.get("home") or {}).get("xg"))
-    away.xg = _num((s.get("away") or {}).get("xg"))
+    # xg has None semantics (schemas.TeamStats): "provider did not supply it" must stay
+    # None so the shot proxy / prior can take over. Coercing a missing value to 0.0
+    # would read as "zero chances created" — from the provider chosen FOR its xG, and
+    # precisely when its /stats call failed (fetch_live swallows that and passes None).
+    hx = (s.get("home") or {}).get("xg")
+    ax = (s.get("away") or {}).get("xg")
+    home.xg = _num(hx) if hx is not None else None
+    away.xg = _num(ax) if ax is not None else None
     home.shots = int(_num((s.get("home") or {}).get("shots")))
     away.shots = int(_num((s.get("away") or {}).get("shots")))
     home.shots_on_target = int(_num((s.get("home") or {}).get("shots_on_target")))

@@ -88,8 +88,13 @@ def team_stats_from_statistics(stat_block: dict[str, Any] | None) -> TeamStats:
     # API-Football's in-play WC statistics omit ``expected_goals`` entirely. Leave xg
     # as None when absent (do NOT coerce to 0.0) so the model can fall back to the
     # shot-based proxy / prior instead of reading "no xG" as "no chances created".
+    # "Absent" includes the empty-string / "-" placeholders the API uses for blank
+    # fields — _to_float would turn those into a fake "real xG = 0.0" that suppresses
+    # the proxy, the exact failure the None contract exists to prevent.
     xg_raw = items.get("expected_goals")
-    stats.xg = _to_float(xg_raw) if xg_raw is not None else None
+    if isinstance(xg_raw, str):
+        xg_raw = xg_raw.strip()
+    stats.xg = _to_float(xg_raw) if xg_raw not in (None, "", "-") else None
     poss = _to_float(items.get("ball possession"))
     stats.possession = poss / 100.0 if poss > 1.0 else (poss or 0.5)
     pa = _to_float(items.get("passes %"))
@@ -126,17 +131,26 @@ def snapshot_from_payload(
     home_stats = team_stats_from_statistics(by_team.get(home_name))
     away_stats = team_stats_from_statistics(by_team.get(away_name))
 
-    # Fall back to counting red cards from events if statistics omit them.
+    # Statistics can omit or LAG red cards (events land minutes earlier — exactly the
+    # window the model's biggest in-play rate shock matters most). Count dismissals per
+    # team from events — including second yellows, whose detail reads "Second Yellow
+    # card" with no "red" in it — and take the max of the two sources, so a second
+    # sending-off is never dropped because the first was already counted.
     if events_response:
+        ev_home = ev_away = 0
         for ev in events_response:
-            if str(ev.get("type", "")).lower() == "card" and "red" in str(
-                ev.get("detail", "")
-            ).lower():
-                ev_team = (ev.get("team") or {}).get("name")
-                if ev_team == home_name and home_stats.red_cards == 0:
-                    home_stats.red_cards += 1
-                elif ev_team == away_name and away_stats.red_cards == 0:
-                    away_stats.red_cards += 1
+            if str(ev.get("type", "")).lower() != "card":
+                continue
+            detail = str(ev.get("detail", "")).lower()
+            if "red" not in detail and "second yellow" not in detail:
+                continue
+            ev_team = (ev.get("team") or {}).get("name")
+            if ev_team == home_name:
+                ev_home += 1
+            elif ev_team == away_name:
+                ev_away += 1
+        home_stats.red_cards = max(home_stats.red_cards, ev_home)
+        away_stats.red_cards = max(away_stats.red_cards, ev_away)
 
     venue = (fx.get("venue") or {}).get("name")
     # Inject real pre-match priors (Elo + neutral-venue) so the LIVE model isn't a flat
