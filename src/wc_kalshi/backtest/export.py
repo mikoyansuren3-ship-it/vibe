@@ -17,7 +17,7 @@ import hashlib
 import json
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,11 @@ from .replay import Backtester, _bucket_market_by_tick
 log = get_logger("backtest.export")
 
 _OUTCOMES = ("home", "draw", "away")
+
+# A "live" match whose last snapshot is older than this never got its FT capture —
+# treat it as stale/unsettled instead of publishing it as in-progress forever.
+# 3h > the longest possible match (120' + pens + stoppage + halftime) with margin.
+_LIVE_STALE_AFTER = timedelta(hours=3)
 
 # Scoreline-derived market series we price + settle (read-only "Markets" view).
 _DERIVED_TYPES = {"KXWCTOTAL": "total", "KXWCBTTS": "btts", "KXWCSPREAD": "spread", "KXWCTEAMTOTAL": "team_total"}
@@ -1079,9 +1084,23 @@ async def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, A
 
     live: list[tuple[Any, dict[str, Any]]] = []
     live_ids: set[str] = set()
+    now = datetime.now(timezone.utc)
     for mid in src.match_ids():
         snaps = src.iter_match_snapshots(mid)
         if snaps and snaps[-1].period.is_live and not snaps[-1].period.is_finished:
+            # Staleness cutoff: a match whose FT snapshot was never captured (recorder
+            # crash, or the orchestrator gave up settling) keeps a live-looking last
+            # snapshot FOREVER — without a cutoff the 60s publisher would re-export it
+            # as an in-progress game for the rest of the tournament.
+            last_ts = snaps[-1].ts
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            if now - last_ts > _LIVE_STALE_AFTER:
+                log.warning(
+                    "match looks live but is stale — excluding from live export",
+                    extra={"match_id": mid, "last_snapshot_ts": last_ts.isoformat()},
+                )
+                continue
             live_ids.add(mid)
             quotes = _read_all_quotes(db_path, mid)
             b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid), quotes)

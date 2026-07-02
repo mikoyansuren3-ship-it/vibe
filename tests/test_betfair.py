@@ -66,3 +66,37 @@ def test_merge_rejects_date_mismatch():
     _merged, report = merge_markets([match], parse_stream_path(STREAM))
     assert report.matched == 0
     assert match["match_id"] in report.unmatched_statsbomb
+
+
+def test_merge_never_attaches_future_quotes():
+    """Carry-forward-only: a tick must never receive a quote captured at a LATER
+    minute — a post-goal price attached to a pre-goal tick is lookahead in the
+    edge-vs-Betfair measurement."""
+    match = {
+        "match_id": "m-look",
+        "home_team": "Argentina",
+        "away_team": "France",
+        "metadata": {"match_date": "2022-12-18"},
+        "ticks": [
+            {"minute": 9, "period": "1H"},   # only future quote (10') in range -> none
+            {"minute": 11, "period": "1H"},  # past quote at 10' -> attaches
+            {"minute": 14, "period": "1H"},  # nearest is 15' (future); 10' too old -> none
+        ],
+    }
+
+    from datetime import datetime, timezone
+
+    class _TL:
+        market_id = "1.999"
+        market_time = datetime(2022, 12, 18, 15, 0, tzinfo=timezone.utc)
+        clock_mode = "ht_detected"
+
+        @staticmethod
+        def as_outcomes(home, away):
+            return {}, {10: {"home": 0.40}, 15: {"home": 0.90}}
+
+    merged, report = merge_markets([match], [_TL()])
+    ticks = merged[0]["ticks"]
+    assert "markets" not in ticks[0]  # 10' quote is in the tick's future
+    assert ticks[1]["markets"] == {"home": 0.40}  # carried forward from 10'
+    assert "markets" not in ticks[2]  # 15' is future; 10' is 4' old (> tolerance)

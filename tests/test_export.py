@@ -176,19 +176,23 @@ def test_export_attribution_survives_id_order_drift(cfg, tmp_path, monkeypatch):
 def test_export_live_emits_all_live_matches(cfg, tmp_path):
     from wc_kalshi.backtest.export import export_live
     from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
 
     db = Database(f"sqlite:///{tmp_path / 'rec.sqlite3'}")
+    # Live matches must carry RECENT timestamps: export_live excludes anything whose
+    # last snapshot is older than the staleness cutoff (never-settled ≠ live).
+    t0 = utcnow() - timedelta(minutes=55)
     # Two live matches (m_b updated more recently) + one finished (excluded).
     _persist_match(db, "m_a", [
-        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
-        _match(30, MatchPeriod.FIRST_HALF, 1, 0, ts=T0 + timedelta(minutes=30)),
-    ], [_mkt(Outcome.HOME, "H", 60, 62, ts=T0 + timedelta(seconds=1))])
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=t0),
+        _match(30, MatchPeriod.FIRST_HALF, 1, 0, ts=t0 + timedelta(minutes=30)),
+    ], [_mkt(Outcome.HOME, "H", 60, 62, ts=t0 + timedelta(seconds=1))])
     _persist_match(db, "m_b", [
-        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
-        _match(50, MatchPeriod.SECOND_HALF, 0, 1, ts=T0 + timedelta(minutes=50)),
-    ], [_mkt(Outcome.AWAY, "A", 55, 57, ts=T0 + timedelta(seconds=1))])
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=t0),
+        _match(50, MatchPeriod.SECOND_HALF, 0, 1, ts=t0 + timedelta(minutes=50)),
+    ], [_mkt(Outcome.AWAY, "A", 55, 57, ts=t0 + timedelta(seconds=1))])
     _persist_match(db, "m_done", [
-        _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
+        _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=t0, status="finished"),
     ], [])
 
     doc = asyncio.run(export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out")))
@@ -243,6 +247,31 @@ def test_export_live_no_live_match(cfg, tmp_path):
     assert doc["bundles"] == []
     assert "generated_at" in doc  # staleness heartbeat for the web's "live feed offline" state
     assert "upcoming" in doc  # projections present even when nothing is live
+
+
+def test_export_live_excludes_stale_never_settled_match(cfg, tmp_path):
+    """A match that never got its FT snapshot (recorder crash / settlement gave up)
+    keeps a live-looking last tick forever — it must NOT be published as in-progress
+    for the rest of the tournament."""
+    from wc_kalshi.backtest.export import export_live
+    from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
+
+    db = Database(f"sqlite:///{tmp_path / 'rec.sqlite3'}")
+    stale_t0 = utcnow() - timedelta(hours=30)
+    _persist_match(db, "m_stale", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=stale_t0),
+        _match(70, MatchPeriod.SECOND_HALF, 1, 0, ts=stale_t0 + timedelta(minutes=70)),
+    ], [])
+    fresh_t0 = utcnow() - timedelta(minutes=40)
+    _persist_match(db, "m_fresh", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=fresh_t0),
+        _match(35, MatchPeriod.FIRST_HALF, 0, 0, ts=fresh_t0 + timedelta(minutes=35)),
+    ], [_mkt(Outcome.HOME, "H", 50, 52, ts=fresh_t0 + timedelta(seconds=1))])
+
+    doc = asyncio.run(export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out")))
+    ids = [b["match_id"] for b in doc["bundles"]]
+    assert ids == ["m_fresh"]  # the abandoned recording is not "live"
 
 
 def _pre(match_id="up1", *, home_elo=1900.0, away_elo=1700.0, kickoff=None):
