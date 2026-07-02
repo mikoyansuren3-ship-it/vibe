@@ -103,22 +103,96 @@ def _persist_match(db, mid, snaps, markets):
         db.add_market_snapshot(m)
 
 
+def _engineered_bet_match(db, match_id, *, home_final, away_final):
+    """A settled match where the strategy reliably backs Home at 42c (model strongly
+    favours Home via a 2100-v-1500 Elo gap): the final score decides the bet's P&L."""
+    def snap(minute, period, hs, as_, *, ts, status="live"):
+        m = _match(minute, period, hs, as_, ts=ts, status=status)
+        m.match_id = match_id
+        m.context.home_elo, m.context.away_elo = 2100.0, 1500.0
+        return m
+
+    db.add_match_snapshot(snap(5, MatchPeriod.FIRST_HALF, 0, 0, ts=T0))
+    db.add_match_snapshot(snap(
+        90, MatchPeriod.FULL_TIME, home_final, away_final,
+        ts=T0 + timedelta(minutes=90), status="finished",
+    ))
+    for outcome, suffix, bid, ask in (
+        (Outcome.HOME, "H", 40, 42), (Outcome.DRAW, "D", 28, 30), (Outcome.AWAY, "A", 28, 30),
+    ):
+        m = _mkt(outcome, f"{match_id}-{suffix}", bid, ask, ts=T0 + timedelta(seconds=1))
+        m.match_id = match_id
+        db.add_market_snapshot(m)
+
+
+def test_export_attributes_pnl_to_the_right_match(cfg, tmp_path):
+    """Bundle P&L must come from the replay's match-KEYED results — the old positional
+    zip shifted every match's P&L when the id sets drifted between the two scans."""
+    from wc_kalshi.backtest.export import export_bundles
+    from wc_kalshi.models.db import Database
+
+    db_path = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_path)
+    _engineered_bet_match(db, "m_lose", home_final=0, away_final=1)  # Home bet loses
+    _engineered_bet_match(db, "m_win", home_final=2, away_final=0)  # Home bet pays
+
+    doc = asyncio.run(export_bundles(cfg, db_path, str(tmp_path / "out")))
+    pnl = {
+        m["match_id"]: json.loads((tmp_path / "out" / f"{m['match_id']}.json").read_text())["golden"]["pnl"]
+        for m in doc["matches"]
+    }
+    assert pnl["m_win"] > 0 and pnl["m_lose"] < 0
+
+
+def test_export_attribution_survives_id_order_drift(cfg, tmp_path, monkeypatch):
+    """The review's failure mode: match_ids() returns a different order between the
+    replay's scan and any later scan (Postgres DISTINCT instability, or the recorder
+    settling a match mid-export). Attribution must not depend on that order."""
+    from wc_kalshi.backtest.export import export_bundles
+    from wc_kalshi.models.db import Database
+
+    db_path = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_path)
+    _engineered_bet_match(db, "m_lose", home_final=0, away_final=1)
+    _engineered_bet_match(db, "m_win", home_final=2, away_final=0)
+
+    real = Database.match_ids
+    calls = {"n": 0}
+
+    def drifting(self):
+        calls["n"] += 1
+        ids = real(self)
+        return ids if calls["n"] % 2 else list(reversed(ids))
+
+    monkeypatch.setattr(Database, "match_ids", drifting)
+    doc = asyncio.run(export_bundles(cfg, db_path, str(tmp_path / "out2")))
+    pnl = {
+        m["match_id"]: json.loads((tmp_path / "out2" / f"{m['match_id']}.json").read_text())["golden"]["pnl"]
+        for m in doc["matches"]
+    }
+    assert pnl["m_win"] > 0 and pnl["m_lose"] < 0
+
+
 def test_export_live_emits_all_live_matches(cfg, tmp_path):
     from wc_kalshi.backtest.export import export_live
     from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
 
     db = Database(f"sqlite:///{tmp_path / 'rec.sqlite3'}")
+    # Live matches must carry RECENT timestamps: export_live excludes anything whose
+    # last snapshot is older than the staleness cutoff (never-settled ≠ live).
+    t0 = utcnow() - timedelta(minutes=55)
     # Two live matches (m_b updated more recently) + one finished (excluded).
     _persist_match(db, "m_a", [
-        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
-        _match(30, MatchPeriod.FIRST_HALF, 1, 0, ts=T0 + timedelta(minutes=30)),
-    ], [_mkt(Outcome.HOME, "H", 60, 62, ts=T0 + timedelta(seconds=1))])
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=t0),
+        _match(30, MatchPeriod.FIRST_HALF, 1, 0, ts=t0 + timedelta(minutes=30)),
+    ], [_mkt(Outcome.HOME, "H", 60, 62, ts=t0 + timedelta(seconds=1))])
     _persist_match(db, "m_b", [
-        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=T0),
-        _match(50, MatchPeriod.SECOND_HALF, 0, 1, ts=T0 + timedelta(minutes=50)),
-    ], [_mkt(Outcome.AWAY, "A", 55, 57, ts=T0 + timedelta(seconds=1))])
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=t0),
+        _match(50, MatchPeriod.SECOND_HALF, 0, 1, ts=t0 + timedelta(minutes=50)),
+    ], [_mkt(Outcome.AWAY, "A", 55, 57, ts=t0 + timedelta(seconds=1))])
     _persist_match(db, "m_done", [
-        _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=T0, status="finished"),
+        _match(90, MatchPeriod.FULL_TIME, 2, 1, ts=t0, status="finished"),
     ], [])
 
     doc = asyncio.run(export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out")))
@@ -173,6 +247,31 @@ def test_export_live_no_live_match(cfg, tmp_path):
     assert doc["bundles"] == []
     assert "generated_at" in doc  # staleness heartbeat for the web's "live feed offline" state
     assert "upcoming" in doc  # projections present even when nothing is live
+
+
+def test_export_live_excludes_stale_never_settled_match(cfg, tmp_path):
+    """A match that never got its FT snapshot (recorder crash / settlement gave up)
+    keeps a live-looking last tick forever — it must NOT be published as in-progress
+    for the rest of the tournament."""
+    from wc_kalshi.backtest.export import export_live
+    from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
+
+    db = Database(f"sqlite:///{tmp_path / 'rec.sqlite3'}")
+    stale_t0 = utcnow() - timedelta(hours=30)
+    _persist_match(db, "m_stale", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=stale_t0),
+        _match(70, MatchPeriod.SECOND_HALF, 1, 0, ts=stale_t0 + timedelta(minutes=70)),
+    ], [])
+    fresh_t0 = utcnow() - timedelta(minutes=40)
+    _persist_match(db, "m_fresh", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=fresh_t0),
+        _match(35, MatchPeriod.FIRST_HALF, 0, 0, ts=fresh_t0 + timedelta(minutes=35)),
+    ], [_mkt(Outcome.HOME, "H", 50, 52, ts=fresh_t0 + timedelta(seconds=1))])
+
+    doc = asyncio.run(export_live(cfg, f"sqlite:///{tmp_path / 'rec.sqlite3'}", str(tmp_path / "out")))
+    ids = [b["match_id"] for b in doc["bundles"]]
+    assert ids == ["m_fresh"]  # the abandoned recording is not "live"
 
 
 def _pre(match_id="up1", *, home_elo=1900.0, away_elo=1700.0, kickoff=None):

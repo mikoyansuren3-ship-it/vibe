@@ -94,4 +94,7 @@ async def test_replay_evaluates_full_sample_despite_daily_loss_limit(cfg, tmp_db
     assert not bt.rt.risk.halted
     assert res.n_fills == 2  # one losing fill per match — match 2 was NOT censored
     assert all(p < 0 for p in res.per_match_pnl)
+    # P&L is also keyed by match_id (what export attribution must consume).
+    assert set(res.pnl_by_match) == {"r1", "r2"}
+    assert list(res.pnl_by_match.values()) == res.per_match_pnl
     await bt.aclose()

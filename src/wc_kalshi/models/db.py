@@ -262,7 +262,14 @@ class Database:
     # -- replay / query helpers ------------------------------------------ #
     def match_ids(self) -> list[str]:
         with self.session() as s:
-            rows = s.execute(select(MatchSnapshotRow.match_id).distinct()).scalars().all()
+            # Deterministic order: DISTINCT alone is an accident of the backend's scan
+            # (and differs between SQLite and Postgres), but replay iteration order
+            # decides Kelly compounding, so runs must be reproducible.
+            rows = s.execute(
+                select(MatchSnapshotRow.match_id)
+                .distinct()
+                .order_by(MatchSnapshotRow.match_id)
+            ).scalars().all()
             return list(rows)
 
     def iter_match_snapshots(self, match_id: str) -> list[MatchSnapshot]:

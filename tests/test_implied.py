@@ -43,9 +43,32 @@ def test_favourite_has_highest_probability():
     assert view.outcomes[Outcome.HOME].implied_prob > view.outcomes[Outcome.AWAY].implied_prob
 
 
-def test_handles_missing_outcome():
+def test_full_book_is_complete():
+    view = implied_from_markets(_markets(), method="proportional")
+    assert view.complete is True
+
+
+def test_partial_book_is_not_devigged():
+    """A missing leg must NOT inflate the others: proportional de-vig over 2 of 3
+    legs would force them to sum to 1.0, manufacturing edges. The view keeps the
+    raw mids and is flagged incomplete."""
     markets = _markets()[:2]  # only home + draw
     view = implied_from_markets(markets, method="proportional")
+    assert view.complete is False
     assert Outcome.AWAY not in view.outcomes
-    s = sum(om.implied_prob for om in view.outcomes.values())
-    assert abs(s - 1.0) < 1e-6
+    for om in view.outcomes.values():
+        assert om.implied_prob == om.mid_prob  # raw, un-normalized
+    assert sum(om.implied_prob for om in view.outcomes.values()) < 1.0
+
+
+def test_one_sided_leg_with_last_price_does_not_count():
+    """A leg quoting only a stale last trade (no two-sided book) contributes nothing
+    to de-vig — the whole view degrades to incomplete."""
+    markets = _markets()
+    markets[2] = MarketSnapshot(
+        market_ticker="T-away", match_id="m1", outcome=Outcome.AWAY,
+        yes_bid=None, yes_ask=None, last_price=20,
+    )
+    view = implied_from_markets(markets, method="proportional")
+    assert view.complete is False
+    assert Outcome.AWAY not in view.outcomes

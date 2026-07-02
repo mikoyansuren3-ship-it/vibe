@@ -370,13 +370,17 @@ def merge_markets(
         # Pre-off line -> earliest tick (becomes the primary CLV reference).
         if pre:
             ticks[0].setdefault("markets", {}).update(pre)
-        # In-play quotes -> nearest tick within tolerance (never overwrite, never on FT).
+        # In-play quotes -> most recent PAST-OR-PRESENT quote within tolerance (never
+        # overwrite, never on FT). Carry-forward-only, matching how a live feed behaves:
+        # nearest-by-absolute-distance could attach the quote from minute m+1/m+2 to a
+        # tick at m — if a goal lands at m+1, the strategy "trades" at m against a price
+        # that already contains the goal (lookahead in the edge-vs-Betfair measurement).
         for tick in ticks:
             if tick.get("period") == "FT" or "markets" in tick or not inplay:
                 continue
-            nearest = min(inplay, key=lambda mm: abs(mm - tick["minute"]))
-            if abs(nearest - tick["minute"]) <= tolerance:
-                tick["markets"] = inplay[nearest]
+            past = [mm for mm in inplay if mm <= tick["minute"]]
+            if past and tick["minute"] - max(past) <= tolerance:
+                tick["markets"] = inplay[max(past)]
         match.setdefault("metadata", {}).update({
             "betfair_market_id": tl.market_id,
             "betfair_clock_mode": tl.clock_mode,

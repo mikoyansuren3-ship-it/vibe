@@ -54,15 +54,34 @@ export default function Page() {
   useEffect(() => { if (typeof location !== "undefined") history.replaceState(null, "", `#${tab}`); }, [tab]);
   useEffect(() => { if (mode === "basic" && tab === "sandbox") setTab("overview"); }, [mode, tab]);
 
-  // Near-live: poll all in-progress matches from Vercel Blob (~1 min lag by design).
+  // Near-live: poll all in-progress matches (~1 min lag by design).
   const didAutoLive = useRef(false);
+  const lastGen = useRef(0); // newest generated_at applied — rejects out-of-order responses
+  const liveFails = useRef(0);
   useEffect(() => {
     let alive = true;
-    const tick = () => loadLive().then(({ bundles: lb, upcoming, generatedAt }) => {
+    const tick = () => loadLive().then((res) => {
       if (!alive) return;
-      setLiveBundles(lb);
-      setUpcomingBundles(upcoming);
-      setLiveUpdatedAt(generatedAt);
+      if (!res.ok) {
+        // Transient fetch failure: keep showing the last known-good feed — one dropped
+        // request over a 2h match must not empty the live list and yank the viewer off
+        // the game. Only a sustained outage (~3 min) clears it, and liveUpdatedAt goes
+        // null so the UI shows its honest "live feed offline" state.
+        liveFails.current += 1;
+        if (liveFails.current >= 4) {
+          setLiveBundles([]);
+          setLiveUpdatedAt(null);
+        }
+        return;
+      }
+      // A slow response can land after a newer one: applying it would move the score /
+      // playhead backwards. generated_at is monotonic at the publisher — enforce it here.
+      if (res.generatedAt !== null && res.generatedAt < lastGen.current) return;
+      if (res.generatedAt !== null) lastGen.current = res.generatedAt;
+      liveFails.current = 0;
+      setLiveBundles(res.bundles);
+      setUpcomingBundles(res.upcoming);
+      setLiveUpdatedAt(res.generatedAt);
     });
     tick();
     const h = setInterval(tick, 45000);

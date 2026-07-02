@@ -76,6 +76,11 @@ class EdgeDetector:
         )
 
     def evaluate(self, model: Probabilities, market: MarketView) -> list[EdgeSignal]:
+        # A partial 1X2 book carries raw (un-de-vigged) mids: acting on it would pick
+        # BUY/SELL direction off numbers with the vig still in (or, pre-guard, off
+        # legs inflated to sum to 1). No coherent market to compare against — skip.
+        if not market.complete:
+            return []
         # Shrink the model toward the (sharper) de-vigged market before judging edges, so
         # we only act on the residual the model adds. At weight 1.0 this is a no-op.
         eff = market_pooled(model, market, self.market_pool_weight)

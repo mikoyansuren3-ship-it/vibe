@@ -2,6 +2,7 @@
 
 from wc_kalshi.ingestion.football.apifootball import parse_period, snapshot_from_payload
 from wc_kalshi.ingestion.football.simulated import SimulatedFootballProvider, simulate_full_match
+from wc_kalshi.ingestion.football.thestatsapi import snapshot_from_match
 from wc_kalshi.ingestion.kalshi.feed import market_snapshot_from_api, parse_orderbook
 from wc_kalshi.ingestion.kalshi.market_map import match_event_to_markets
 from wc_kalshi.models.schemas import MatchPeriod, Outcome
@@ -70,6 +71,67 @@ def test_parse_period():
     assert parse_period("FT") is MatchPeriod.FULL_TIME
     assert parse_period("NS") is MatchPeriod.PRE
     assert parse_period(None) is MatchPeriod.FIRST_HALF
+
+
+def test_xg_placeholder_strings_stay_none():
+    """The API's blank-field placeholders ("", "-") must map to xg=None, not a fake
+    "real xG = 0.0" that suppresses the shot proxy (the None contract in TeamStats)."""
+    from wc_kalshi.ingestion.football.apifootball import team_stats_from_statistics
+
+    def block(xg_value):
+        return {"statistics": [{"type": "expected_goals", "value": xg_value}]}
+
+    assert team_stats_from_statistics(block("")).xg is None
+    assert team_stats_from_statistics(block("-")).xg is None
+    assert team_stats_from_statistics(block(" - ")).xg is None
+    assert team_stats_from_statistics(block(None)).xg is None
+    assert team_stats_from_statistics(block("1.34")).xg == 1.34
+    assert team_stats_from_statistics(block("0.0")).xg == 0.0  # explicit zero is real
+
+
+def _cards_fixture(stats_reds: int, events: list) -> dict:
+    return {
+        "fixture": {"id": 7, "status": {"short": "2H", "elapsed": 70}},
+        "teams": {"home": {"name": "USA"}, "away": {"name": "Wales"}},
+        "goals": {"home": 0, "away": 0},
+        "_stats": [{
+            "team": {"name": "Wales"},
+            "statistics": [{"type": "Red Cards", "value": stats_reds}],
+        }],
+        "_events": events,
+    }
+
+
+def _card(detail, team="Wales"):
+    return {"type": "Card", "detail": detail, "team": {"name": team}}
+
+
+def test_second_dismissal_counted_when_stats_lag():
+    """Stats lag events by minutes; a second red (or second-yellow dismissal, whose
+    detail has no 'red' in it) must still be counted — the old fallback capped at 1."""
+    fx = _cards_fixture(1, [_card("Red Card"), _card("Second Yellow card")])
+    snap = snapshot_from_payload(fx, fx["_stats"], fx["_events"])
+    assert snap.away.red_cards == 2
+
+
+def test_stats_red_count_kept_when_events_missing():
+    fx = _cards_fixture(1, [])
+    snap = snapshot_from_payload(fx, fx["_stats"], fx["_events"])
+    assert snap.away.red_cards == 1  # max(stats, events) never loses the stats count
+
+
+# -- TheStatsAPI xg None-contract -------------------------------------------- #
+def test_thestatsapi_missing_xg_stays_none():
+    """The fallback provider exists FOR xG; a failed /stats call must yield xg=None
+    (proxy takes over), never a fabricated 0.0."""
+    match = {"id": 1, "home_team": "USA", "away_team": "Wales", "minute": 70,
+             "status": "live", "home_score": 0, "away_score": 0}
+    snap = snapshot_from_match(match, stats=None)
+    assert snap.home.xg is None and snap.away.xg is None
+
+    with_xg = snapshot_from_match(match, stats={"home": {"xg": 2.1}, "away": {"xg": 0.0}})
+    assert with_xg.home.xg == 2.1
+    assert with_xg.away.xg == 0.0  # explicit zero from the provider is a real value
 
 
 # -- Kalshi market mapping -------------------------------------------------- #
