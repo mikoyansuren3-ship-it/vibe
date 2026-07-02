@@ -265,8 +265,6 @@ class Backtester:
         # isolated DB so they never touch live data.
         self.cfg = cfg.model_copy(deep=True)
         self.cfg.mode = RunMode.PAPER
-        # Disable the daily-loss halt for evaluation runs (we want the full sample);
-        # the guardrail itself is tested separately.
         if db is None:
             fd, path = tempfile.mkstemp(prefix="wck-backtest-", suffix=".sqlite3")
             os.close(fd)
@@ -290,6 +288,13 @@ class Backtester:
 
     def _collect(self, per_match_pnl: list[float], equity_curve: list[float]) -> BacktestResult:
         rt = self.rt
+        if rt.risk.halted:
+            # Every match processed after the halt tripped contributed zero fills, so the
+            # metrics below describe a truncated sample, not the strategy.
+            log.warning(
+                "risk halt engaged during backtest — results are censored from the halt point",
+                extra={"reason": rt.risk.halt_reason},
+            )
         clv = self._compute_clv()
         ci_preoff = clustered_clv_ci(clv["preoff"][2])
         ci_5m = clustered_clv_ci(clv["5m"][2], seed=1)
@@ -410,6 +415,11 @@ class Backtester:
         self, source_db: Database, *, match_ids: list[str] | None = None
     ) -> BacktestResult:
         """Replay stored snapshots from a previous session through the strategy."""
+        # Full sample for evaluation: the daily-loss halt is a LIVE guardrail keyed to a
+        # wall-clock day, but a replay compresses the whole session into one day — left
+        # active it silently zeroes every match after the first −$max_daily_loss and
+        # censors CLV/verdict (run_synthetic/run_historical already disable it).
+        self.rt.risk.limits.max_daily_loss = 1e12
         ids = match_ids or source_db.match_ids()
         per_match: list[float] = []
         equity_curve: list[float] = []
