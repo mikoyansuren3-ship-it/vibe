@@ -200,6 +200,10 @@ class MarketSnapshot(BaseModel):
 
     @property
     def yes_mid_cents(self) -> float | None:
+        """Best-effort reference price: book mid, falling back to the last trade when
+        the book is one-sided. Fine for display/CLV references; do NOT use for de-vig
+        or mark-to-market — ``last_price`` can be arbitrarily stale (see the book_mid
+        variants below)."""
         if self.yes_bid is None or self.yes_ask is None:
             return float(self.last_price) if self.last_price is not None else None
         return (self.yes_bid + self.yes_ask) / 2.0
@@ -207,6 +211,21 @@ class MarketSnapshot(BaseModel):
     @property
     def yes_mid_prob(self) -> float | None:
         mid = self.yes_mid_cents
+        return None if mid is None else mid / 100.0
+
+    @property
+    def yes_book_mid_cents(self) -> float | None:
+        """Mid of the two-sided BOOK only — None when either side is missing. The
+        strict variant for de-vig and mark-to-market: a live two-sided book is
+        executable by definition, while a ``last_price`` fallback would let a stale
+        print set implied probabilities and the marks the daily-loss halt keys off."""
+        if self.yes_bid is None or self.yes_ask is None:
+            return None
+        return (self.yes_bid + self.yes_ask) / 2.0
+
+    @property
+    def yes_book_mid_prob(self) -> float | None:
+        mid = self.yes_book_mid_cents
         return None if mid is None else mid / 100.0
 
     @property

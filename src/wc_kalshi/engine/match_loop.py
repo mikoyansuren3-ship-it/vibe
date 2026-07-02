@@ -97,7 +97,14 @@ class TickProcessor:
         self._sample_calibration(match, probs, mstate)
 
         feats = match_features(match)
-        mids = {s.market_ticker: s.yes_mid_prob for s in market_snaps if s.yes_mid_prob is not None}
+        # Strict two-sided book mids only: these become rt.last_mids — the marks behind
+        # unrealized P&L, the daily-loss halt, and position stops. A one-sided book
+        # keeps its previous mark rather than adopting a stale last-trade print.
+        mids = {
+            s.market_ticker: s.yes_book_mid_prob
+            for s in market_snaps
+            if s.yes_book_mid_prob is not None
+        }
 
         # 2) Market-implied + edges
         view = implied_from_markets(market_snaps, method=cfg.edge.devig_method) if market_snaps else None

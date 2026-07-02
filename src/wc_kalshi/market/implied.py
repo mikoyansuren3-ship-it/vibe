@@ -36,6 +36,11 @@ class MarketView:
     overround: float
     method: str
     outcomes: dict[Outcome, OutcomeMarket]
+    # True only when the FULL 1X2 book was de-vigged (all three legs two-sided).
+    # De-vig over a partial book is incoherent: proportional normalization forces
+    # 2 legs to sum to 1.0, inflating both — so an incomplete view keeps RAW mids
+    # in ``implied_prob`` and the edge detector must not act on it.
+    complete: bool = True
 
     def probabilities(self) -> Probabilities:
         return Probabilities(
@@ -137,15 +142,22 @@ def implied_from_markets(
     method: str = "proportional",
     match_id: str | None = None,
 ) -> MarketView:
-    """De-vig a set of 1X2 Yes markets into implied probabilities."""
+    """De-vig a set of 1X2 Yes markets into implied probabilities.
+
+    Inputs are the strict two-sided book mids (``yes_book_mid_prob``) — a leg whose
+    book is one-sided contributes nothing, even if it has a ``last_price``. De-vig
+    runs only on a COMPLETE three-leg book; a partial book is returned with raw mids
+    and ``complete=False`` so downstream consumers don't act on inflated numbers.
+    """
     by_outcome = {s.outcome: s for s in snapshots}
     present = [o for o in (Outcome.HOME, Outcome.DRAW, Outcome.AWAY) if o in by_outcome]
-    mids = [by_outcome[o].yes_mid_prob for o in present]
+    mids = [by_outcome[o].yes_book_mid_prob for o in present]
     valid = [(o, m) for o, m in zip(present, mids) if m is not None]
+    complete = len(valid) == 3
 
     devig = _METHODS.get(method, _devig_proportional)
     raw = [m for _, m in valid]
-    implied = devig(raw) if raw else []
+    implied = devig(raw) if complete else raw
     overround = sum(raw) if raw else 0.0
 
     outcomes: dict[Outcome, OutcomeMarket] = {}
@@ -164,5 +176,6 @@ def implied_from_markets(
     mid = match_id or (snapshots[0].match_id if snapshots else "")
     ts = snapshots[0].ts if snapshots else utcnow()
     return MarketView(
-        match_id=mid, ts=ts, overround=overround, method=method, outcomes=outcomes
+        match_id=mid, ts=ts, overround=overround, method=method, outcomes=outcomes,
+        complete=complete,
     )

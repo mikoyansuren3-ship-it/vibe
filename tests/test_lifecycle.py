@@ -202,3 +202,22 @@ async def test_kill_sets_flatten_request(rt):
     orch.kill("test")
     assert orch._flatten_requested is True
     assert not rt.risk.trading_allowed
+
+
+async def test_marks_ignore_stale_last_price(rt, match_factory):
+    """rt.last_mids feeds unrealized P&L, the daily-loss halt, and position stops —
+    a one-sided book must keep its previous mark, not adopt a stale last trade."""
+    from wc_kalshi.engine.match_loop import MatchState, TickProcessor
+    from wc_kalshi.models.schemas import MarketSnapshot
+
+    proc = TickProcessor(rt, trade=False, persist=False)
+    match = match_factory(match_id="m1", minute=10)
+    snaps = [
+        MarketSnapshot(market_ticker="KX-BOOK", match_id="m1", outcome=Outcome.HOME,
+                       yes_bid=40, yes_ask=42),
+        MarketSnapshot(market_ticker="KX-STALE", match_id="m1", outcome=Outcome.DRAW,
+                       yes_bid=None, yes_ask=None, last_price=95),
+    ]
+    await proc.process(match, snaps, MatchState("m1"))
+    assert rt.last_mids.get("KX-BOOK") == 0.41  # two-sided book marks
+    assert "KX-STALE" not in rt.last_mids  # stale print never becomes a mark

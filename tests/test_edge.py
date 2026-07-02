@@ -56,3 +56,15 @@ def test_price_outside_band_not_actionable():
     view = _view(away=(4, 6))
     sig = next(s for s in det.evaluate(_probs(0.10, 0.20, 0.70), view) if s.outcome is Outcome.AWAY)
     assert not sig.actionable
+
+
+def test_incomplete_book_produces_no_signals():
+    """With a leg's book missing, the view carries raw (un-de-vigged) mids — no
+    coherent market to compare against, so the detector must not act at all."""
+    det = EdgeDetector(min_edge=0.01, min_edge_after_costs=0.0)
+    snaps = [
+        MarketSnapshot(market_ticker=f"T-{o.value}", match_id="m1", outcome=o, yes_bid=b, yes_ask=a)
+        for o, (b, a) in (((Outcome.HOME), (49, 51)), ((Outcome.DRAW), (26, 29)))
+    ]
+    view = implied_from_markets(snaps, method="proportional")
+    assert det.evaluate(_probs(0.70, 0.20, 0.10), view) == []
