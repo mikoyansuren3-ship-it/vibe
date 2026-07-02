@@ -10,6 +10,7 @@ Orderbook/market parsing is isolated in pure functions for offline testing.
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -156,31 +157,51 @@ class LiveKalshiMarketFeed(MarketFeed):
         *,
         series_ticker: str | None = None,
         fetch_depth: bool = True,
+        map_retry_seconds: float = 60.0,
     ) -> None:
         self.client = client
         self.series_ticker = series_ticker
         self.fetch_depth = fetch_depth
-        self._maps: dict[str, MatchMarketMap | None] = {}
+        # Successful mappings are cached for the match's lifetime. Failures are NOT:
+        # a transient 5xx (or an event that hasn't flipped to "open" yet) at first tick
+        # must not silently disable the match's market feed for the whole game — retry
+        # after a backoff instead.
+        self.map_retry_seconds = map_retry_seconds
+        self._maps: dict[str, MatchMarketMap] = {}
+        self._map_retry_at: dict[str, float] = {}  # match_id -> monotonic next-attempt time
 
     async def _map_for(self, match: MatchSnapshot) -> MatchMarketMap | None:
-        if match.match_id not in self._maps:
-            try:
-                self._maps[match.match_id] = await resolve_market_map(
-                    self.client,
-                    match.match_id,
-                    match.home_team,
-                    match.away_team,
-                    series_ticker=self.series_ticker,
-                )
-            except Exception as exc:
-                log.warning("market map resolve failed", extra={"err": str(exc)})
-                self._maps[match.match_id] = None
-            if self._maps[match.match_id] is None:
-                log.warning(
-                    "no Kalshi market mapped",
-                    extra={"match_id": match.match_id, "teams": f"{match.home_team}-{match.away_team}"},
-                )
-        return self._maps[match.match_id]
+        mapping = self._maps.get(match.match_id)
+        if mapping is not None:
+            return mapping
+        now = time.monotonic()
+        if now < self._map_retry_at.get(match.match_id, 0.0):
+            return None  # recent failure — wait out the backoff before re-resolving
+        try:
+            mapping = await resolve_market_map(
+                self.client,
+                match.match_id,
+                match.home_team,
+                match.away_team,
+                series_ticker=self.series_ticker,
+            )
+        except Exception as exc:
+            log.warning("market map resolve failed", extra={"err": str(exc)})
+            mapping = None
+        if mapping is None:
+            self._map_retry_at[match.match_id] = now + self.map_retry_seconds
+            log.warning(
+                "no Kalshi market mapped; will retry",
+                extra={
+                    "match_id": match.match_id,
+                    "teams": f"{match.home_team}-{match.away_team}",
+                    "retry_in_s": self.map_retry_seconds,
+                },
+            )
+            return None
+        self._maps[match.match_id] = mapping
+        self._map_retry_at.pop(match.match_id, None)
+        return mapping
 
     async def snapshots_for_match(self, match: MatchSnapshot) -> list[MarketSnapshot]:
         mapping = await self._map_for(match)
