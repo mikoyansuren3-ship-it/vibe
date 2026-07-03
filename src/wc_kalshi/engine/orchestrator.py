@@ -85,8 +85,7 @@ class Orchestrator:
             rt.db.add_match_snapshot(match)
             rt.bus.publish(Event(EventType.MATCH_SNAPSHOT, {"match_id": match.match_id, "minute": match.minute}, match.match_id))
             snaps = await rt.market_feed.snapshots_for_match(match)
-            for s in snaps:
-                rt.db.add_market_snapshot(s)
+            rt.db.add_market_snapshots(snaps)
             await self._capture_extra_markets(match, snaps)
             st = self.states.setdefault(match.match_id, MatchState(match.match_id))
             await self.processor.process(match, snaps, st)

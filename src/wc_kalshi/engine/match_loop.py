@@ -109,10 +109,10 @@ class TickProcessor:
         # 2) Market-implied + edges
         view = implied_from_markets(market_snaps, method=cfg.edge.devig_method) if market_snaps else None
         edges = rt.detector.evaluate(probs, view) if view else []
+        if self.persist and edges:
+            rt.db.add_edges(edges)  # one txn for the tick's 1X2 edges
+            rt.audit.signals(edges)  # one file append + one decisions txn
         for edge in edges:
-            if self.persist:
-                rt.db.add_edge(edge)
-                rt.audit.signal(edge)
             rt.bus.publish(Event(EventType.EDGE, edge.model_dump(mode="json"), match.match_id))
 
         # 3) Alerts (goal / red card / divergence)
