@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine, select
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine, event, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from ..util import utcnow
@@ -143,6 +143,26 @@ class DecisionRow(Base):
     data: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+def _enable_sqlite_wal(engine: Any) -> None:
+    """Put SQLite in WAL + ``synchronous=NORMAL`` on every connection.
+
+    Default ``journal_mode=delete`` + ``synchronous=FULL`` fsyncs on every commit, and
+    the recorder does ~8-12 single-row commits per match-tick *inside the async event
+    loop* — so each fsync stalls the loop that's also polling markets and placing orders.
+    WAL lets readers (the 60s live publisher / dashboard) run without blocking the writer,
+    and NORMAL drops the per-commit fsync to one per checkpoint (WAL keeps this crash-safe
+    for anything but an OS/power failure — acceptable for append-only research capture).
+    No-op for ``:memory:`` (journal stays ``memory``) and never reached for Postgres.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _set_pragmas(dbapi_conn: Any, _record: Any) -> None:  # pragma: no cover - trivial
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
+
+
 class Database:
     """Thin wrapper around the engine + session factory with typed inserts."""
 
@@ -154,6 +174,8 @@ class Database:
             Path(db_url[len("sqlite:///"):]).parent.mkdir(parents=True, exist_ok=True)
         connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
         self.engine = create_engine(db_url, echo=echo, future=True, connect_args=connect_args)
+        if db_url.startswith("sqlite"):
+            _enable_sqlite_wal(self.engine)
         self._sessionmaker = sessionmaker(self.engine, expire_on_commit=False, future=True)
         Base.metadata.create_all(self.engine)
 
