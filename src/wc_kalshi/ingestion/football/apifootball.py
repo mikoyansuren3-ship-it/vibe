@@ -11,6 +11,7 @@ default runtime provider is the simulator precisely so we never silently burn qu
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -323,23 +324,33 @@ class APIFootballProvider(FootballDataProvider):
             fixtures = [
                 f for f in fixtures if (f.get("league") or {}).get("id") == self.league_id
             ]
-        snapshots: list[MatchSnapshot] = []
-        for fixture in fixtures:
-            fixture_id = (fixture.get("fixture") or {}).get("id")
-            stats = None
-            if self.fetch_statistics:
-                try:
-                    stats = (
-                        await self._get("/fixtures/statistics", {"fixture": fixture_id})
-                    ).get("response")
-                except Exception as exc:  # degrade gracefully
-                    log.warning("statistics fetch failed", extra={"err": str(exc)})
-            events = await self._fetch_events(fixture_id)
+        # Fan the per-fixture statistics/events/context fetches out concurrently rather
+        # than 1+2N serial round-trips, so the last match's quote is no longer N RTTs
+        # staler than the first. The shared RequestBudget still bounds the aggregate rate;
+        # gather only overlaps the network waits, it doesn't lift the token ceiling.
+        snaps = await asyncio.gather(*(self._assemble_live(f) for f in fixtures))
+        return [s for s in snaps if s is not None]
+
+    async def _assemble_live(self, fixture: dict[str, Any]) -> MatchSnapshot | None:
+        """Build one live snapshot, gathering its statistics + events concurrently.
+
+        A single malformed fixture is logged and dropped rather than sinking the whole
+        poll — the sub-fetches already degrade to ``None`` on their own errors, so this
+        guard only catches a mapping failure on one fixture's payload.
+        """
+        fixture_id = (fixture.get("fixture") or {}).get("id")
+        try:
+            stats, events = await asyncio.gather(
+                self._fetch_statistics(fixture_id),
+                self._fetch_events(fixture_id),
+            )
             snap = snapshot_from_payload(fixture, stats, events)
             if self.fetch_context and fixture_id is not None:
                 await self._apply_context(snap, fixture_id)
-            snapshots.append(snap)
-        return snapshots
+            return snap
+        except Exception as exc:  # one bad fixture must not drop every live match
+            log.warning("live fixture assembly failed", extra={"err": str(exc)})
+            return None
 
     async def fetch_upcoming(self, limit: int = 8) -> list[MatchSnapshot]:
         """Upcoming (not-yet-started) fixtures for pre-match projection. A single
@@ -368,16 +379,23 @@ class APIFootballProvider(FootballDataProvider):
             return None
         fixture = resp[0]
         fixture_id = (fixture.get("fixture") or {}).get("id")
-        stats = None
-        if self.fetch_statistics and fixture_id is not None:
-            try:
-                stats = (
-                    await self._get("/fixtures/statistics", {"fixture": fixture_id})
-                ).get("response")
-            except Exception as exc:
-                log.warning("statistics fetch failed (settle)", extra={"err": str(exc)})
-        events = await self._fetch_events(fixture_id)
+        stats, events = await asyncio.gather(
+            self._fetch_statistics(fixture_id),
+            self._fetch_events(fixture_id),
+        )
         return snapshot_from_payload(fixture, stats, events)
+
+    async def _fetch_statistics(self, fixture_id: Any) -> list[dict[str, Any]] | None:
+        """Per-team in-play statistics (shots, xG when present, cards, possession…)."""
+        if not self.fetch_statistics or fixture_id is None:
+            return None
+        try:
+            return (
+                await self._get("/fixtures/statistics", {"fixture": fixture_id})
+            ).get("response")
+        except Exception as exc:  # degrade gracefully
+            log.warning("statistics fetch failed", extra={"err": str(exc)})
+            return None
 
     async def _fetch_events(self, fixture_id: Any) -> list[dict[str, Any]] | None:
         """Goals/cards/subs with minute + player (for goal timing, per-half, props)."""

@@ -97,6 +97,7 @@ class Runtime:
 
 
 def _build_kalshi_client(cfg: AppConfig):
+    from ..ingestion.budget import RequestBudget
     from ..ingestion.kalshi.auth import KalshiSigner
     from ..ingestion.kalshi.client import KalshiClient
 
@@ -111,6 +112,9 @@ def _build_kalshi_client(cfg: AppConfig):
         signer=signer,
         timeout=cfg.kalshi.request_timeout_seconds,
         max_retries=cfg.kalshi.max_retries,
+        read_limiter=RequestBudget.per_second(
+            cfg.kalshi.requests_per_second, burst=cfg.kalshi.request_burst
+        ),
     )
 
 

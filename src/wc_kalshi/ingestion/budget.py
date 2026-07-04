@@ -41,6 +41,19 @@ class RequestBudget:
         self._lock = asyncio.Lock()
         self.granted = 0  # diagnostics: total tokens granted this process
 
+    @classmethod
+    def per_second(cls, rate: float, *, burst: int | None = None) -> "RequestBudget":
+        """Build a bucket from a per-SECOND rate (an exchange's req/s tier) instead of a
+        daily quota — the same token bucket, sized for short-horizon pacing.
+
+        ``burst`` defaults to ~1 s of steady-state capacity so a small fan-out isn't
+        paced at all, while a large concurrent burst across many live matches is still
+        bounded to the tier. Used for the client-side Kalshi limiter once market reads
+        run in parallel.
+        """
+        daily = max(1, round(rate * SECONDS_PER_DAY))
+        return cls(daily, burst=burst if burst is not None else max(1, round(rate)))
+
     def _refill(self) -> None:
         now = self._time()
         elapsed = max(0.0, now - self._last)

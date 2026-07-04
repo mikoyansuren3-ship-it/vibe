@@ -8,13 +8,16 @@ unsigned GETs and raises clearly on write attempts).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ...logging_setup import get_logger
 from ..http import request_with_retry
 from .auth import KalshiSigner
+
+if TYPE_CHECKING:
+    from ..budget import RequestBudget
 
 log = get_logger("kalshi.client")
 
@@ -34,10 +37,14 @@ class KalshiClient:
         signer: KalshiSigner | None = None,
         timeout: float = 10.0,
         max_retries: int = 4,
+        read_limiter: "RequestBudget | None" = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.signer = signer
         self.max_retries = max_retries
+        # Paces GET reads only (market/orderbook fan-out) so parallel polls stay under the
+        # exchange's read tier. Order placement (POST/DELETE) bypasses it — never delayed.
+        self._read_limiter = read_limiter
         self._client = httpx.AsyncClient(timeout=timeout)
 
     async def aclose(self) -> None:
@@ -68,6 +75,9 @@ class KalshiClient:
         json: Any | None = None,
     ) -> dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
+        # Rate-limit reads only; writes (order placement/cancel) must never wait on a token.
+        if self._read_limiter is not None and method.upper() == "GET":
+            await self._read_limiter.acquire()
         resp = await request_with_retry(
             self._client,
             method,

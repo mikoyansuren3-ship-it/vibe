@@ -57,6 +57,52 @@ def test_try_acquire_is_nonblocking():
     assert b.try_acquire() is True
 
 
+def test_per_second_builds_bucket_from_a_rate():
+    b = RequestBudget.per_second(10.0)
+    assert abs(b.rate - 10.0) < 1e-9
+    assert b.capacity == 10  # default burst ~= 1 s of steady-state capacity
+    b2 = RequestBudget.per_second(8.0, burst=20)
+    assert abs(b2.rate - 8.0) < 1e-9
+    assert b2.capacity == 20
+
+
+async def test_kalshi_read_limiter_paces_gets_not_writes(monkeypatch):
+    """The client-side limiter throttles GET reads (the market/orderbook fan-out) so
+    parallel polling stays under the exchange's read tier — but order writes bypass it,
+    so pacing never adds latency to the trade path."""
+    from wc_kalshi.ingestion.kalshi.client import KalshiClient
+
+    class _Signer:  # non-None so writes are permitted; headers_for_url is never hit here
+        def headers_for_url(self, method, url):
+            return {}
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        def json(self):
+            return {}
+
+    async def fake_request(*args, **kwargs):
+        return _Resp()
+
+    monkeypatch.setattr(
+        "wc_kalshi.ingestion.kalshi.client.request_with_retry", fake_request
+    )
+    limiter = RequestBudget.per_second(10.0, burst=50)
+    client = KalshiClient("https://x", signer=_Signer(), read_limiter=limiter)
+
+    await client.get_orderbook("T1")
+    await client.get_market("T2")
+    assert limiter.granted == 2  # each GET read consumed exactly one token
+
+    await client.create_order({"ticker": "T", "action": "buy", "count": 1})
+    await client.cancel_order("oid")
+    assert limiter.granted == 2  # POST/DELETE writes bypass the limiter — no token, no wait
+
+    await client.aclose()
+
+
 async def test_provider_consumes_budget_per_request(monkeypatch):
     """Each provider _get should consume exactly one token."""
     from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
