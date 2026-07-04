@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from . import trading
 from ..eventbus import Event, EventType
-from ..features.engineer import match_features
 from ..logging_setup import get_logger
 from ..market.implied import implied_from_markets
 from ..modeling.xg_proxy import observed_xg
@@ -96,7 +95,6 @@ class TickProcessor:
             mstate.first_prob = probs
         self._sample_calibration(match, probs, mstate)
 
-        feats = match_features(match)
         # Strict two-sided book mids only: these become rt.last_mids — the marks behind
         # unrealized P&L, the daily-loss halt, and position stops. A one-sided book
         # keeps its previous mark rather than adopting a stale last-trade print.
@@ -155,7 +153,6 @@ class TickProcessor:
             "edges": len(edges),
             "actionable": sum(1 for e in edges if e.actionable),
             "model": (probs.p_home, probs.p_draw, probs.p_away),
-            "features": feats,
         }
 
     def _sample_calibration(self, match, probs, mstate) -> None:

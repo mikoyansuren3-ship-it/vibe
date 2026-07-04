@@ -27,6 +27,10 @@ class CalibrationTracker:
     ece_floor: float = 0.5  # Kelly multiplier when uncalibrated / too few samples
     preds: list[tuple[float, float, float]] = field(default_factory=list)
     actuals: list[tuple[int, int, int]] = field(default_factory=list)
+    # (n_at_compute, factor) memo — calibration_factor() is called once per actionable edge
+    # (every sizing tick) but only changes when a settled match is add()ed, so we key the
+    # cache on the sample count and rebuild the O(history) arrays + binning only then.
+    _cf_cache: tuple[int, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def add(self, probs: Probabilities, realized: Outcome) -> None:
         p = probs.normalized()
@@ -139,7 +143,16 @@ class CalibrationTracker:
         return out
 
     def calibration_factor(self) -> float:
-        """Kelly multiplier in [ece_floor, 1.0]. Conservative until proven calibrated."""
+        """Kelly multiplier in [ece_floor, 1.0]. Conservative until proven calibrated.
+        Memoized on the sample count (see ``_cf_cache``) — identical result, but no
+        per-tick numpy rebuild between settlements."""
+        if self._cf_cache is not None and self._cf_cache[0] == self.n:
+            return self._cf_cache[1]
+        val = self._calibration_factor()
+        self._cf_cache = (self.n, val)
+        return val
+
+    def _calibration_factor(self) -> float:
         if self.n < self.min_samples:
             return self.ece_floor
         e = self.ece()
@@ -209,6 +222,8 @@ class BinaryCalibrationTracker:
     ece_floor: float = 0.5
     preds: list[float] = field(default_factory=list)
     actuals: list[int] = field(default_factory=list)
+    # (n_at_compute, equal_count, factor) memo — see CalibrationTracker._cf_cache.
+    _cf_cache: tuple[int, bool, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def add(self, prob: float, realized: bool) -> None:
         self.preds.append(min(1.0, max(0.0, float(prob))))
@@ -249,7 +264,19 @@ class BinaryCalibrationTracker:
 
     def calibration_factor(self, *, equal_count: bool = True) -> float:
         """Kelly multiplier in [ece_floor, 1.0]. Conservative until proven calibrated; uses
-        equal-count bins by default since binary heads are often thin/skewed."""
+        equal-count bins by default since binary heads are often thin/skewed. Memoized on
+        (sample count, equal_count) — see CalibrationTracker.calibration_factor."""
+        if (
+            self._cf_cache is not None
+            and self._cf_cache[0] == self.n
+            and self._cf_cache[1] == equal_count
+        ):
+            return self._cf_cache[2]
+        val = self._calibration_factor(equal_count=equal_count)
+        self._cf_cache = (self.n, equal_count, val)
+        return val
+
+    def _calibration_factor(self, *, equal_count: bool) -> float:
         if self.n < self.min_samples:
             return self.ece_floor
         e = self.ece(equal_count=equal_count)
