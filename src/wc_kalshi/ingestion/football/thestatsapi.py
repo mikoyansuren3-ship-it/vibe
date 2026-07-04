@@ -117,14 +117,14 @@ class TheStatsAPIProvider(FootballDataProvider):
         await self._client.aclose()
 
     async def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if self._budget is not None:
-            await self._budget.acquire()
         resp = await request_with_retry(
             self._client,
             "GET",
             f"{self.base_url}{endpoint}",
             params=params,
             max_retries=self.max_retries,
+            # Spend a budget token per wire attempt (retries included), not once per call.
+            on_attempt=self._budget.acquire if self._budget is not None else None,
         )
         resp.raise_for_status()
         return resp.json()

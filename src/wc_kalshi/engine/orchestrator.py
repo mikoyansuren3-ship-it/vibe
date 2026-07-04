@@ -183,7 +183,14 @@ class Orchestrator:
                 # A transient network/API error (DNS blip, 5xx, machine waking from sleep)
                 # must NOT kill a long-running recorder — log it and retry next interval.
                 try:
-                    matches = await self.provider.fetch_live()
+                    # Bound the poll: a wedged endpoint (or a stacked-up Retry-After) must
+                    # not freeze the loop with open positions we can't react to. On timeout
+                    # we skip the tick entirely (no settle) and retry next interval — a
+                    # dropped-match false-settle from an empty live set would be worse.
+                    matches = await asyncio.wait_for(
+                        self.provider.fetch_live(),
+                        timeout=rt.cfg.football.poll_timeout_seconds,
+                    )
                     self._last_live = matches or []
                     if matches:
                         await asyncio.gather(*(self._handle(m) for m in matches))
@@ -191,6 +198,11 @@ class Orchestrator:
                     # the live feed (it finished), so replay can settle + score it.
                     await self._settle_dropped({m.match_id for m in self._last_live})
                     await self._maybe_sweep_resting()
+                except asyncio.TimeoutError:
+                    log.warning(
+                        "live poll timed out; skipping tick",
+                        extra={"timeout_s": rt.cfg.football.poll_timeout_seconds},
+                    )
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive across blips
                     log.warning("poll failed; retrying next interval", extra={"err": str(exc)})
                 tick += 1

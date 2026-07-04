@@ -7,6 +7,7 @@ testable in one place.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -16,6 +17,12 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential_jitter,
 )
+
+# A server can name any Retry-After it likes; an exhausted-quota response with a value in
+# the hundreds of seconds would otherwise sleep the whole live loop with positions open. We
+# honour the hint but never freeze longer than this — the caller (orchestrator) also wraps
+# the poll in a hard timeout as a second line of defence.
+RETRY_AFTER_CAP_SECONDS = 60.0
 
 
 class RateLimited(Exception):
@@ -45,10 +52,11 @@ def _parse_retry_after(resp: httpx.Response) -> float | None:
 
 
 def _wait(state: Any) -> float:
-    """Exponential jitter back-off, but honour an explicit Retry-After if present."""
+    """Exponential jitter back-off, but honour an explicit Retry-After if present —
+    clamped so a hostile/huge hint can't freeze the loop (see RETRY_AFTER_CAP_SECONDS)."""
     exc = state.outcome.exception() if state.outcome else None
     if isinstance(exc, RateLimited) and exc.retry_after is not None:
-        return max(0.0, exc.retry_after)
+        return max(0.0, min(exc.retry_after, RETRY_AFTER_CAP_SECONDS))
     return wait_exponential_jitter(initial=0.5, max=30.0)(state)
 
 
@@ -62,12 +70,17 @@ async def request_with_retry(
     json: Any | None = None,
     max_retries: int = 4,
     sign: Any | None = None,
+    on_attempt: Callable[[], Awaitable[None]] | None = None,
 ) -> httpx.Response:
     """Issue a request with retry/back-off.
 
     ``sign`` (optional) is a callable ``(method, url) -> dict[str, str]`` returning
     fresh auth headers; it is invoked on *every* attempt so time-based signatures
     are never stale on a retry.
+
+    ``on_attempt`` (optional) is awaited once *per HTTP attempt* — pass a request-budget
+    ``acquire`` here so a retried request spends a token for every wire request it makes,
+    not just one per logical call (otherwise a 3-retry call under-accounts quota by 3×).
     """
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(max(1, max_retries)),
@@ -76,6 +89,8 @@ async def request_with_retry(
         reraise=True,
     ):
         with attempt:
+            if on_attempt is not None:
+                await on_attempt()  # one budget token for THIS wire request (retries included)
             req_headers = dict(headers or {})
             if sign is not None:
                 req_headers.update(sign(method, url))

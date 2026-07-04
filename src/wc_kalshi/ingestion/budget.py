@@ -61,17 +61,24 @@ class RequestBudget:
         self._last = now
 
     async def acquire(self, n: int = 1) -> None:
-        """Block until ``n`` tokens are available, then consume them."""
+        """Block until ``n`` tokens are available, then consume them.
+
+        The lock is held only for the refill+consume check, NOT across the sleep — a
+        waiter that must wait for a refill would otherwise hold the lock the whole time and
+        serialise every other caller (including an urgent poll) behind it. We drop the lock
+        while sleeping and re-check on wake; another caller may have taken the tokens first,
+        so the loop simply waits again.
+        """
         n = max(1, n)
-        async with self._lock:
-            while True:
+        while True:
+            async with self._lock:
                 self._refill()
                 if self._tokens >= n:
                     self._tokens -= n
                     self.granted += n
                     return
                 deficit = n - self._tokens
-                await self._sleep(deficit / self.rate)
+            await self._sleep(deficit / self.rate)
 
     def try_acquire(self, n: int = 1) -> bool:
         """Non-blocking variant: consume ``n`` tokens if available, else False."""

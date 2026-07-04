@@ -82,6 +82,10 @@ class KalshiSection(BaseModel):
 class FootballSection(BaseModel):
     provider: str = "simulated"
     poll_interval_seconds: float = 15.0
+    # Hard ceiling on a single live poll (fetch_live). Even with Retry-After clamped, a
+    # wedged/slow endpoint must not freeze the loop with positions open — we abandon the
+    # poll past this and retry next interval. Must exceed request_timeout_seconds.
+    poll_timeout_seconds: float = 30.0
     apifootball_base: str = "https://v3.football.api-sports.io"
     thestatsapi_base: str = "https://api.thestatsapi.com"
     request_timeout_seconds: float = 10.0

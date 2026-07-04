@@ -76,8 +76,9 @@ class KalshiClient:
     ) -> dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
         # Rate-limit reads only; writes (order placement/cancel) must never wait on a token.
-        if self._read_limiter is not None and method.upper() == "GET":
-            await self._read_limiter.acquire()
+        # The token is spent per wire attempt (retries included) so a retried read can't
+        # quietly exceed the exchange's read tier.
+        limit_reads = self._read_limiter is not None and method.upper() == "GET"
         resp = await request_with_retry(
             self._client,
             method,
@@ -86,6 +87,7 @@ class KalshiClient:
             json=json,
             max_retries=self.max_retries,
             sign=self._sign,
+            on_attempt=self._read_limiter.acquire if limit_reads else None,
         )
         if resp.status_code >= 400:
             raise KalshiAPIError(resp.status_code, resp.text)
