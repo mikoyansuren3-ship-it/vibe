@@ -40,6 +40,7 @@ class Orchestrator:
         self._settled_ids: set[str] = set()
         self._settle_max_attempts = 40  # ~ minutes of retrying before giving up
         self._extra_last: dict[str, float] = {}  # match_id -> last extra-market capture (mono)
+        self._extra_tasks: set[asyncio.Task] = set()  # in-flight background captures
 
     def stop(self) -> None:
         self._stop.set()
@@ -81,20 +82,26 @@ class Orchestrator:
         rt = self.rt
         if match.status == "abandoned":  # interrupted/suspended/etc — no valid result
             return
+        snaps: list = []
         try:
             rt.db.add_match_snapshot(match)
             rt.bus.publish(Event(EventType.MATCH_SNAPSHOT, {"match_id": match.match_id, "minute": match.minute}, match.match_id))
             snaps = await rt.market_feed.snapshots_for_match(match)
             rt.db.add_market_snapshots(snaps)
-            await self._capture_extra_markets(match, snaps)
             st = self.states.setdefault(match.match_id, MatchState(match.match_id))
             await self.processor.process(match, snaps, st)
         except Exception as exc:  # one bad match must not kill the whole run
             log.exception("match handling failed", extra={"match_id": match.match_id, "err": str(exc)})
+        # The broader-market capture is research-only (feeds raw_market_quotes, never the
+        # decision) yet costs many serial Kalshi RTTs. Spawn it in the BACKGROUND after the
+        # trade path so it can't inject ~6 s of latency ahead of an order.
+        self._spawn_extra_capture(match, snaps)
 
-    async def _capture_extra_markets(self, match: MatchSnapshot, snaps: list) -> None:
-        """Record the broader per-match market set (Total/Spread/BTTS/1H/corners/…) into
-        raw_market_quotes. Throttled, live-feed only — for researching the roadmap markets."""
+    def _spawn_extra_capture(self, match: MatchSnapshot, snaps: list) -> None:
+        """Fire-and-forget the extra-market capture (Total/Spread/BTTS/1H/corners/…) into
+        raw_market_quotes. Throttled + gated here synchronously so we don't even create a
+        task when it isn't due; the task is tracked so it isn't GC'd and is drained on stop.
+        """
         rt = self.rt
         if not getattr(rt.cfg.kalshi, "capture_extra_markets", False):
             return
@@ -106,17 +113,27 @@ class Orchestrator:
         if "-" not in ev:
             return
         now = time.monotonic()
-        interval = rt.cfg.kalshi.extra_markets_interval_seconds
-        if now - self._extra_last.get(match.match_id, 0.0) < interval:
+        if now - self._extra_last.get(match.match_id, 0.0) < rt.cfg.kalshi.extra_markets_interval_seconds:
             return
         self._extra_last[match.match_id] = now
+        task = asyncio.create_task(
+            self._capture_extra_markets(client, match.match_id, ev.split("-", 1)[1])
+        )
+        self._extra_tasks.add(task)
+        task.add_done_callback(self._extra_tasks.discard)
+
+    async def _capture_extra_markets(self, client, match_id: str, event_suffix: str) -> None:
+        """Background body: pull the roadmap series for one fixture and persist the quotes.
+        Kept serial (not gathered) so a burst doesn't drain the shared Kalshi read limiter
+        and add jitter to the decision path — nothing waits on this, so 6 s in the
+        background is fine."""
         from ..ingestion.kalshi.extra_markets import capture_extra_markets
 
         try:
-            rows = await capture_extra_markets(client, match.match_id, ev.split("-", 1)[1])
-            rt.db.add_raw_market_quotes(rows)
+            rows = await capture_extra_markets(client, match_id, event_suffix)
+            self.rt.db.add_raw_market_quotes(rows)
         except Exception as exc:
-            log.warning("extra-market capture failed", extra={"match_id": match.match_id, "err": str(exc)})
+            log.warning("extra-market capture failed", extra={"match_id": match_id, "err": str(exc)})
 
     async def _settle_dropped(self, current_ids: set[str]) -> None:
         """Capture the settled state of matches that have left the live feed.
@@ -188,6 +205,12 @@ class Orchestrator:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            # Cancel any in-flight background captures so they don't outlive the loop or
+            # write to a closing DB (research-only; a dropped snapshot on stop is harmless).
+            for t in self._extra_tasks:
+                t.cancel()
+            if self._extra_tasks:
+                await asyncio.gather(*self._extra_tasks, return_exceptions=True)
             if self._flatten_requested:
                 try:
                     from .trading import flatten_all

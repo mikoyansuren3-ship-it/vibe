@@ -1,5 +1,6 @@
 """Execution lifecycle: kill-switch flatten, resting-order timeout, adaptive polling."""
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -194,6 +195,57 @@ async def test_reappearing_match_clears_pending(rt, match_factory):
     assert "m1" in orch._pending_settle
     await orch._settle_dropped(current_ids={"m1"})  # back live -> cleared
     assert "m1" not in orch._pending_settle and "m1" not in orch._settled_ids
+
+
+async def test_extra_capture_runs_after_process_in_background(rt, match_factory):
+    """The research-only extra-market capture must be fire-and-forget AFTER the decision,
+    never an inline block ahead of it — otherwise it injects ~6 s of Kalshi RTTs between
+    the quote and the order."""
+    from wc_kalshi.models.schemas import MarketSnapshot
+
+    order: list[str] = []
+
+    class _Client:
+        async def get_markets(self, *, event_ticker=None, **kw):
+            order.append("capture")
+            return {"markets": []}
+
+    class _Feed:
+        client = _Client()
+
+        async def snapshots_for_match(self, match):
+            return [
+                MarketSnapshot(
+                    market_ticker="KXWCGAME-26JUN27USAWAL-USA",
+                    event_ticker="KXWCGAME-26JUN27USAWAL",
+                    match_id=match.match_id, outcome=Outcome.HOME, yes_bid=40, yes_ask=42,
+                )
+            ]
+
+        async def aclose(self):
+            pass
+
+    rt.market_feed = _Feed()
+    rt.cfg.kalshi.capture_extra_markets = True
+    rt.cfg.kalshi.extra_markets_interval_seconds = 0.0
+
+    orch = Orchestrator(rt, _StaticProvider([]), trade=False)
+
+    async def fake_process(match, snaps, st):
+        order.append("process")
+
+    orch.processor.process = fake_process  # type: ignore[assignment]
+
+    await orch._handle(match_factory(match_id="m1", minute=30, period=MatchPeriod.FIRST_HALF))
+    # Fire-and-forget: the task exists but hasn't run yet — process was NOT blocked on it.
+    assert orch._extra_tasks
+    assert order == ["process"]
+    await asyncio.gather(*orch._extra_tasks)  # drain the background capture
+    # The capture fans out over the whole roadmap series, so it hits the client many times —
+    # what matters is the decision ran first and every capture RTT landed strictly after it.
+    assert order[0] == "process"
+    assert order.count("capture") >= 1
+    assert all(step == "capture" for step in order[1:])
 
 
 async def test_kill_sets_flatten_request(rt):
