@@ -273,3 +273,75 @@ async def test_marks_ignore_stale_last_price(rt, match_factory):
     await proc.process(match, snaps, MatchState("m1"))
     assert rt.last_mids.get("KX-BOOK") == 0.41  # two-sided book marks
     assert "KX-STALE" not in rt.last_mids  # stale print never becomes a mark
+
+
+async def test_defer_epilogue_moves_whole_book_mark_off_process(rt, match_factory):
+    """defer_book_epilogue must move the whole-book mark + snapshots OUT of process() (they
+    become a per-poll concern) and into book_epilogue(). Without the flag — the backtest
+    path — process() still marks inline, exactly once, as before."""
+    from wc_kalshi.engine.match_loop import MatchState, TickProcessor
+    from wc_kalshi.models.schemas import MarketSnapshot
+
+    calls = {"n": 0}
+    real_uu = rt.risk.update_unrealized
+
+    def counting_uu(v):
+        calls["n"] += 1
+        return real_uu(v)
+
+    rt.risk.update_unrealized = counting_uu  # type: ignore[method-assign]
+    snaps = [MarketSnapshot(market_ticker="KX-BOOK", match_id="m1", outcome=Outcome.HOME,
+                            yes_bid=40, yes_ask=42)]
+    match = match_factory(match_id="m1", minute=30, period=MatchPeriod.FIRST_HALF)
+
+    # Deferred (live): process() does NOT mark the whole book; book_epilogue() does.
+    proc = TickProcessor(rt, trade=False, persist=False, defer_book_epilogue=True)
+    await proc.process(match, snaps, MatchState("m1"))
+    assert calls["n"] == 0
+    proc.book_epilogue()
+    assert calls["n"] == 1
+
+    # Not deferred (backtest): process() marks inline, once, unchanged.
+    calls["n"] = 0
+    proc2 = TickProcessor(rt, trade=False, persist=False)
+    await proc2.process(match, snaps, MatchState("m1b"))
+    assert calls["n"] == 1
+
+
+async def test_orchestrator_marks_whole_book_once_per_poll(rt, match_factory):
+    """The live loop must mark the whole book + snapshot risk/portfolio ONCE per poll, not
+    once per match — that redundancy was O(matches × positions) every tick."""
+    from wc_kalshi.models.schemas import MarketSnapshot
+
+    class _Feed:
+        async def snapshots_for_match(self, match):
+            return [MarketSnapshot(market_ticker=f"KX-{match.match_id}", match_id=match.match_id,
+                                   outcome=Outcome.HOME, yes_bid=40, yes_ask=42)]
+
+        async def aclose(self):
+            pass
+
+    rt.market_feed = _Feed()
+    calls = {"uu": 0, "epi": 0}
+    real_uu = rt.risk.update_unrealized
+
+    def counting_uu(v):
+        calls["uu"] += 1
+        return real_uu(v)
+
+    rt.risk.update_unrealized = counting_uu  # type: ignore[method-assign]
+
+    matches = [match_factory(match_id=f"m{i}", minute=30, period=MatchPeriod.FIRST_HALF)
+               for i in range(3)]
+    orch = Orchestrator(rt, _StaticProvider(matches), trade=False)
+    real_epi = orch.processor.book_epilogue
+
+    def counting_epi():
+        calls["epi"] += 1
+        return real_epi()
+
+    orch.processor.book_epilogue = counting_epi  # type: ignore[method-assign]
+    await orch.run(max_ticks=1)
+
+    assert calls["epi"] == 1  # one epilogue for the whole poll, regardless of match count
+    assert calls["uu"] == 1  # ...and the whole-book mark ran once, not three times

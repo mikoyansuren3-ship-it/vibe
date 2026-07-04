@@ -26,7 +26,12 @@ class Orchestrator:
         self.rt = rt
         self.provider = provider
         self.processor = TickProcessor(
-            rt, trade=trade, decision_mode=rt.cfg.execution.decision_mode
+            rt,
+            trade=trade,
+            decision_mode=rt.cfg.execution.decision_mode,
+            # Live loop marks the whole book + snapshots ONCE per poll (book_epilogue below),
+            # not once per match — see TickProcessor.book_epilogue.
+            defer_book_epilogue=True,
         )
         self.states: dict[str, MatchState] = {}
         self._stop = asyncio.Event()
@@ -198,6 +203,10 @@ class Orchestrator:
                     # the live feed (it finished), so replay can settle + score it.
                     await self._settle_dropped({m.match_id for m in self._last_live})
                     await self._maybe_sweep_resting()
+                    # One whole-book mark-to-market + risk/portfolio snapshot for the WHOLE
+                    # poll (positions marked, settlements booked, resting sweeps done) —
+                    # instead of the same O(positions) work repeated inside every match.
+                    self.processor.book_epilogue()
                 except asyncio.TimeoutError:
                     log.warning(
                         "live poll timed out; skipping tick",
