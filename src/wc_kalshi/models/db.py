@@ -13,11 +13,23 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine, event, select
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    create_engine,
+    event,
+    func,
+    select,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from ..util import utcnow
-from .schemas import EdgeSignal, MarketSnapshot, MatchSnapshot, Probabilities
+from .schemas import EdgeSignal, MarketSnapshot, MatchPeriod, MatchSnapshot, Probabilities
 
 
 class Base(DeclarativeBase):
@@ -26,6 +38,10 @@ class Base(DeclarativeBase):
 
 class MatchSnapshotRow(Base):
     __tablename__ = "match_snapshots"
+    # Composite (match_id, ts): the hot per-match query filters match_id + orders by ts, so a
+    # single-column index forced a temp-B-tree sort every time. create_all adds this to
+    # existing DBs on next open.
+    __table_args__ = (Index("ix_match_snapshots_mid_ts", "match_id", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -39,6 +55,7 @@ class MatchSnapshotRow(Base):
 
 class MarketSnapshotRow(Base):
     __tablename__ = "market_snapshots"
+    __table_args__ = (Index("ix_market_snapshots_mid_ts", "match_id", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     market_ticker: Mapped[str] = mapped_column(String(96), index=True)
@@ -57,6 +74,7 @@ class RawMarketQuoteRow(Base):
     Separate from MarketSnapshotRow (which is the typed 1X2 the live strategy trades)."""
 
     __tablename__ = "raw_market_quotes"
+    __table_args__ = (Index("ix_raw_quotes_mid_ticker_ts", "match_id", "market_ticker", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     series: Mapped[str] = mapped_column(String(32), index=True)
@@ -86,6 +104,7 @@ class ProbabilityRow(Base):
 
 class EdgeRow(Base):
     __tablename__ = "edge_signals"
+    __table_args__ = (Index("ix_edge_signals_mid_ts", "match_id", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -203,7 +222,9 @@ class Database:
                     home_score=snap.home_score,
                     away_score=snap.away_score,
                     status=snap.status,
-                    data=snap.model_dump(mode="json"),
+                    # Drop the raw provider payload — ~61% of the blob and never read back
+                    # (raw defaults None, so rows persisted before this still validate fine).
+                    data=snap.model_dump(mode="json", exclude={"raw"}),
                 )
             )
 
@@ -321,6 +342,35 @@ class Database:
                 .order_by(MatchSnapshotRow.match_id)
             ).scalars().all()
             return list(rows)
+
+    def latest_match_snapshot_meta(self) -> list[tuple[str, str, datetime]]:
+        """``(match_id, period, ts)`` for the LAST snapshot of each match, read from the
+        promoted columns only (no ``data`` blob). One indexed query via
+        ``id IN (SELECT MAX(id) … GROUP BY match_id)`` instead of loading + validating every
+        match's full snapshot history — lets a caller find the handful of live matches in ~ms
+        regardless of table size. Ordered by match_id for deterministic iteration."""
+        R = MatchSnapshotRow
+        with self.session() as s:
+            latest_ids = select(func.max(R.id)).group_by(R.match_id).scalar_subquery()
+            rows = s.execute(
+                select(R.match_id, R.period, R.ts)
+                .where(R.id.in_(latest_ids))
+                .order_by(R.match_id)
+            ).all()
+            return [(r.match_id, r.period, r.ts) for r in rows]
+
+    def settled_match_ids(self) -> set[str]:
+        """Match ids that reached a finished (FT) state in ANY snapshot — the replay-eligible
+        set — via one indexed query, WITHOUT loading snapshots. Exactly equivalent to
+        ``any(s.period.is_finished for s in snaps)`` because ``is_finished`` ⟺ period is
+        FULL_TIME, so the export can filter to settled matches before deserializing anything."""
+        with self.session() as s:
+            rows = s.execute(
+                select(MatchSnapshotRow.match_id)
+                .where(MatchSnapshotRow.period == MatchPeriod.FULL_TIME.value)
+                .distinct()
+            ).scalars().all()
+            return set(rows)
 
     def iter_match_snapshots(self, match_id: str) -> list[MatchSnapshot]:
         with self.session() as s:

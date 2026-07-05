@@ -271,9 +271,12 @@ class Backtester:
         # isolated DB so they never touch live data.
         self.cfg = cfg.model_copy(deep=True)
         self.cfg.mode = RunMode.PAPER
+        # Only a scratch DB WE created gets torn down in aclose (a caller-supplied db is theirs).
+        self._temp_db_path: str | None = None
         if db is None:
             fd, path = tempfile.mkstemp(prefix="wck-backtest-", suffix=".sqlite3")
             os.close(fd)
+            self._temp_db_path = path
             db = Database(f"sqlite:///{path}")
         self.rt: Runtime = build_runtime(self.cfg, db=db)
         self.rt.audit.enabled = False  # backtests don't need the audit trail (speed)
@@ -421,15 +424,29 @@ class Backtester:
         return result
 
     async def run_replay(
-        self, source_db: Database, *, match_ids: list[str] | None = None
+        self,
+        source_db: Database | None = None,
+        *,
+        match_ids: list[str] | None = None,
+        preloaded: dict[str, tuple[list, list]] | None = None,
     ) -> BacktestResult:
-        """Replay stored snapshots from a previous session through the strategy."""
+        """Replay stored snapshots from a previous session through the strategy.
+
+        ``preloaded`` maps match_id -> (match_snaps, market_snaps). When given, snapshots come
+        from it instead of ``source_db`` — so an export that replays twice AND builds bundles
+        can deserialize each match once instead of 3–4×. The per-match processing (bucketing,
+        settled skip, P&L) is otherwise identical, so results are unchanged.
+        """
         # Full sample for evaluation: the daily-loss halt is a LIVE guardrail keyed to a
         # wall-clock day, but a replay compresses the whole session into one day — left
         # active it silently zeroes every match after the first −$max_daily_loss and
         # censors CLV/verdict (run_synthetic/run_historical already disable it).
         self.rt.risk.limits.max_daily_loss = 1e12
-        ids = match_ids or source_db.match_ids()
+        if preloaded is not None:
+            ids = match_ids if match_ids is not None else list(preloaded.keys())
+        else:
+            assert source_db is not None, "run_replay needs source_db when preloaded is None"
+            ids = match_ids or source_db.match_ids()
         per_match: list[float] = []
         pnl_by_match: dict[str, float] = {}
         equity_curve: list[float] = []
@@ -437,7 +454,12 @@ class Backtester:
         n_skipped = 0
         prev_realized = 0.0
         for match_id in ids:
-            match_snaps = source_db.iter_match_snapshots(match_id)
+            if preloaded is not None:
+                match_snaps, market_snaps = preloaded[match_id]
+            else:
+                assert source_db is not None  # narrowed: ids were derived from source_db above
+                match_snaps = source_db.iter_match_snapshots(match_id)
+                market_snaps = None
             # Only score fully-played matches: one that never reached a settled (FT) state is
             # in-progress or abandoned (e.g. an INTERRUPTED fixture), and its partial fills
             # would pollute CLV/calibration with no real outcome. Skip it.
@@ -445,7 +467,9 @@ class Backtester:
                 n_skipped += 1
                 log.info("replay: skipping unsettled/abandoned match", extra={"match_id": match_id})
                 continue
-            market_snaps = source_db.iter_market_snapshots(match_id)
+            if market_snaps is None:  # non-preloaded: load only after the settled check
+                assert source_db is not None
+                market_snaps = source_db.iter_market_snapshots(match_id)
             ticks = _bucket_market_by_tick(match_snaps, market_snaps)
             st = MatchState(match_id)
             for match, mk in ticks:
@@ -526,6 +550,17 @@ class Backtester:
 
     async def aclose(self) -> None:
         await self.rt.aclose()
+        # Tear down the scratch DB we created: dispose the engine pool to release its file
+        # handles, then unlink the sqlite file and any WAL/SHM/journal siblings. Otherwise
+        # every export run leaks a temp file + a connection pool.
+        if self._temp_db_path is not None:
+            self.rt.db.engine.dispose()
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                try:
+                    os.unlink(self._temp_db_path + suffix)
+                except FileNotFoundError:
+                    pass
+            self._temp_db_path = None
 
 
 def _bucket_market_by_tick(
@@ -533,15 +568,25 @@ def _bucket_market_by_tick(
 ) -> list[tuple[MatchSnapshot, list[MarketSnapshot]]]:
     """Pair each match snapshot with the market snapshots captured at that tick.
 
-    Market snapshots for tick *i* were written just after match snapshot *i*, so
-    they fall in ``[ts_i, ts_{i+1})``.
+    Market snapshots for tick *i* were written just after match snapshot *i*, so they fall in
+    ``[ts_i, ts_{i+1})``. Both inputs are ts-ordered, so a single two-pointer merge assigns
+    every market snap in O(N+M) — the previous per-tick full scan was O(N×M) (~1.1 s on the
+    largest match, ×3 passes per export). market_snaps is sorted defensively (DB rows already
+    arrive ts-ordered); a stable sort preserves the original within-bucket order.
     """
+    market = sorted(market_snaps, key=lambda s: s.ts)
     out: list[tuple[MatchSnapshot, list[MarketSnapshot]]] = []
+    j, m, n = 0, len(market), len(match_snaps)
     for i, match in enumerate(match_snaps):
         lo = match.ts
-        hi = match_snaps[i + 1].ts if i + 1 < len(match_snaps) else None
-        bucket = [
-            s for s in market_snaps if s.ts >= lo and (hi is None or s.ts < hi)
-        ]
+        hi = match_snaps[i + 1].ts if i + 1 < n else None
+        # Skip anything before this bucket (only bites at i=0 / across empty duplicate-ts
+        # buckets). `< lo` is strict so a snap AT lo stays for this or a later same-ts bucket.
+        while j < m and market[j].ts < lo:
+            j += 1
+        bucket: list[MarketSnapshot] = []
+        while j < m and (hi is None or market[j].ts < hi):
+            bucket.append(market[j])
+            j += 1
         out.append((match, bucket))
     return out

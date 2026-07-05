@@ -127,6 +127,9 @@ def _iter_text_streams(path: str | Path) -> Iterator[tuple[str, io.TextIOBase]]:
     Handles a single ``.json``/``.ndjson``/``.bz2`` file, a ``.tar`` of ``.bz2`` files
     (Betfair PRO packaging), or a directory searched recursively.
     """
+    # Yield STREAMING text handles (never read a whole file into RAM): the caller iterates
+    # line-by-line, so a PRO archive is processed with bounded memory. Each handle stays open
+    # while the generator is suspended at the yield and is closed when iteration resumes.
     p = Path(path)
     if p.is_dir():
         for child in sorted(p.rglob("*")):
@@ -138,20 +141,18 @@ def _iter_text_streams(path: str | Path) -> Iterator[tuple[str, io.TextIOBase]]:
             for member in tf.getmembers():
                 if not member.isfile():
                     continue
-                fh = tf.extractfile(member)
-                if fh is None:
+                member_fh = tf.extractfile(member)  # distinct name: keeps `fh` below text-typed
+                if member_fh is None:
                     continue
-                data = fh.read()
-                if member.name.endswith(".bz2"):
-                    data = bz2.decompress(data)
-                yield member.name, io.StringIO(data.decode("utf-8", "replace"))
+                raw = bz2.BZ2File(member_fh) if member.name.endswith(".bz2") else member_fh
+                yield member.name, io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
         return
     if p.suffix == ".bz2":
         with bz2.open(p, "rt", encoding="utf-8") as fh:
-            yield p.name, io.StringIO(fh.read())
+            yield p.name, fh
         return
     with open(p, encoding="utf-8") as fh:
-        yield p.name, io.StringIO(fh.read())
+        yield p.name, fh
 
 
 def _detect_ht(
@@ -306,11 +307,15 @@ def parse_stream_path(path: str | Path) -> list[MarketTimeline]:
                 mdef = mc.get("marketDefinition")
                 if mdef is not None:
                     is_match_odds[mid] = mdef.get("marketType") == "MATCH_ODDS"
-                per_market.setdefault(mid, []).append((int(pt) if pt is not None else 0, mc))
+                # Only accumulate markets already known to be MATCH_ODDS. A PRO archive carries
+                # dozens of market types per event (CORRECT_SCORE, OVER_UNDER, …); buffering
+                # them all just to discard them at the end is what blows up RAM. Betfair's
+                # opening image for a market always carries its marketDefinition, so the type
+                # is known from the first message and no MATCH_ODDS data is dropped.
+                if is_match_odds.get(mid):
+                    per_market.setdefault(mid, []).append((int(pt) if pt is not None else 0, mc))
     timelines: list[MarketTimeline] = []
-    for mid, msgs in per_market.items():
-        if not is_match_odds.get(mid, False):
-            continue
+    for mid, msgs in per_market.items():  # per_market now holds MATCH_ODDS markets only
         msgs.sort(key=lambda pm: pm[0])
         timelines.append(_build_timeline(mid, msgs))
     return timelines

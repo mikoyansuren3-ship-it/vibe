@@ -420,3 +420,123 @@ def test_export_live_includes_upcoming(cfg, tmp_path):
     assert kos == sorted(kos, key=lambda k: (k is None, k or ""))
     written = json.loads((tmp_path / "out" / "live.json").read_text())
     assert len(written["upcoming"]) == len(doc["upcoming"])
+
+
+def test_latest_match_snapshot_meta_probes_last_row_per_match(tmp_path):
+    """The SQL probe returns the LAST snapshot's (period, ts) per match from promoted columns
+    only — the cheap basis for finding live matches without loading every history."""
+    from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
+
+    db = Database(f"sqlite:///{tmp_path / 'p.sqlite3'}")
+    t0 = utcnow() - timedelta(minutes=60)
+    _persist_match(db, "m1", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=t0),
+        _match(80, MatchPeriod.SECOND_HALF, 2, 0, ts=t0 + timedelta(minutes=80)),
+    ], [])
+    _persist_match(db, "m2", [
+        _match(90, MatchPeriod.FULL_TIME, 1, 1, ts=t0 + timedelta(minutes=95), status="finished"),
+    ], [])
+
+    meta = {mid: period for mid, period, _ts in db.latest_match_snapshot_meta()}
+    assert set(meta) == {"m1", "m2"}
+    assert meta["m1"] == MatchPeriod.SECOND_HALF.value  # the LAST row's period, not the first
+    assert meta["m2"] == MatchPeriod.FULL_TIME.value
+
+
+def test_export_live_loads_only_live_match_histories(cfg, tmp_path, monkeypatch):
+    """The probe keeps export O(live): iter_match_snapshots runs only for matches the cheap
+    (period, ts) probe flags live — never for finished or stale ones."""
+    from wc_kalshi.backtest.export import export_live
+    from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
+
+    db_url = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_url)
+    t0 = utcnow() - timedelta(minutes=40)
+    _persist_match(db, "live1", [_match(30, MatchPeriod.FIRST_HALF, 0, 0, ts=t0)],
+                   [_mkt(Outcome.HOME, "H", 60, 62, ts=t0)])
+    _persist_match(db, "done1",
+                   [_match(90, MatchPeriod.FULL_TIME, 2, 1, ts=t0, status="finished")], [])
+    old = utcnow() - timedelta(hours=6)  # live-looking last snapshot but past the 3h cutoff
+    _persist_match(db, "stale1", [_match(30, MatchPeriod.FIRST_HALF, 0, 0, ts=old)],
+                   [_mkt(Outcome.HOME, "H", 60, 62, ts=old)])
+
+    loaded: list[str] = []
+    real = Database.iter_match_snapshots
+
+    def spy(self, mid):
+        loaded.append(mid)
+        return real(self, mid)
+
+    monkeypatch.setattr(Database, "iter_match_snapshots", spy)
+    doc = asyncio.run(export_live(cfg, db_url, str(tmp_path / "out")))
+
+    assert [b["match_id"] for b in doc["bundles"]] == ["live1"]
+    assert loaded == ["live1"]  # finished + stale filtered by the probe, never loaded
+
+
+def test_raw_provider_payload_not_persisted(tmp_path):
+    """The raw provider blob (~61% of the row, never read back) is dropped on persist; the
+    snapshot still round-trips with raw=None and every other field intact."""
+    from wc_kalshi.models.db import Database, MatchSnapshotRow
+
+    db = Database(f"sqlite:///{tmp_path / 'r.sqlite3'}")
+    snap = _match(30, MatchPeriod.FIRST_HALF, 1, 0, ts=T0).model_copy(
+        update={"raw": {"provider_blob": list(range(100))}}
+    )
+    db.add_match_snapshot(snap)
+
+    with db.session() as s:
+        row = s.query(MatchSnapshotRow).one()
+        assert "raw" not in row.data  # the heavy blob never hits storage
+    loaded = db.iter_match_snapshots(snap.match_id)[0]
+    assert loaded.raw is None  # defaults None on load; nothing consumes it
+    assert loaded.minute == 30 and loaded.home_score == 1  # rest of the snapshot preserved
+
+
+def test_hot_per_match_query_uses_composite_index(tmp_path):
+    """The per-match snapshot query (WHERE match_id … ORDER BY ts, id) must ride the composite
+    (match_id, ts) index and need no temp-B-tree sort for the ORDER BY."""
+    from sqlalchemy import text
+
+    from wc_kalshi.models.db import Database
+
+    db = Database(f"sqlite:///{tmp_path / 'i.sqlite3'}")
+    with db.session() as s:
+        plan = s.execute(text(
+            "EXPLAIN QUERY PLAN "
+            "SELECT * FROM match_snapshots WHERE match_id = 'm' ORDER BY ts, id"
+        )).all()
+    detail = " ".join(str(r) for r in plan).lower()
+    assert "ix_match_snapshots_mid_ts" in detail  # composite index drives the scan
+    assert "temp b-tree" not in detail  # ...so the ORDER BY needs no sort step
+
+
+def test_export_loads_each_match_snapshots_once(cfg, tmp_path, monkeypatch):
+    """Single-pass export: each settled match's snapshots deserialize exactly ONCE (shared
+    across both replays + the bundle builder, was 3–4×), and an unsettled match — excluded by
+    the SQL settled-set — is never loaded at all."""
+    from wc_kalshi.backtest.export import export_bundles
+    from wc_kalshi.models.db import Database
+
+    db_path = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_path)
+    _engineered_bet_match(db, "m_win", home_final=2, away_final=0)
+    _engineered_bet_match(db, "m_lose", home_final=0, away_final=1)
+    live = _match(30, MatchPeriod.FIRST_HALF, 0, 0, ts=T0)  # unsettled: no FT snapshot
+    live.match_id = "m_live"
+    db.add_match_snapshot(live)
+
+    loads: dict[str, int] = {}
+    real = Database.iter_match_snapshots
+
+    def spy(self, mid):
+        loads[mid] = loads.get(mid, 0) + 1
+        return real(self, mid)
+
+    monkeypatch.setattr(Database, "iter_match_snapshots", spy)
+    asyncio.run(export_bundles(cfg, db_path, str(tmp_path / "out")))
+
+    assert loads.get("m_win") == 1 and loads.get("m_lose") == 1  # once each, not 3–4×
+    assert "m_live" not in loads  # unsettled: filtered by the SQL settled-set, never loaded
