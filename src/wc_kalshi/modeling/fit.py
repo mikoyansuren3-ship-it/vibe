@@ -68,16 +68,18 @@ def _realized(final: MatchSnapshot) -> Outcome:
 
 
 def _checkpoint_snaps(match: list[MatchSnapshot]) -> list[MatchSnapshot]:
-    """Pick one live snapshot at/after each checkpoint minute."""
+    """Pick one live snapshot at/after each checkpoint minute — but a single snapshot that
+    clears several not-yet-seen checkpoints at once (sparse capture) is taken ONCE, not once
+    per checkpoint, or the fit would over-weight that lone snapshot."""
     out: list[MatchSnapshot] = []
     seen: set[int] = set()
     for snap in match:
         if not snap.period.is_live:
             continue
-        for cp in FIT_CHECKPOINTS:
-            if cp not in seen and snap.minute >= cp:
-                seen.add(cp)
-                out.append(snap)
+        crossed = [cp for cp in FIT_CHECKPOINTS if cp not in seen and snap.minute >= cp]
+        if crossed:
+            seen.update(crossed)
+            out.append(snap)
     return out
 
 

@@ -421,3 +421,17 @@ async def test_paper_executor_reports_no_late_fills():
         "x", market_ticker="t", action=OrderAction.BUY, match_id="m",
         client_order_id="c", fallback_price_cents=50,
     ) == []
+
+
+async def test_sample_calibration_appends_once_per_tick(rt, match_factory):
+    """A tick that crosses several calibration checkpoints at once pools ONE prediction, not
+    one per checkpoint — the old per-checkpoint append double-weighted sparse snapshots."""
+    from wc_kalshi.engine.match_loop import CALIBRATION_CHECKPOINTS, MatchState, TickProcessor
+
+    proc = TickProcessor(rt, trade=False, persist=False)
+    st = MatchState("m1")
+    match = match_factory(match_id="m1", minute=45, period=MatchPeriod.SECOND_HALF)
+    proc._sample_calibration(match, rt.model.predict(match), st)
+
+    assert st.checkpoints_seen == {cp for cp in CALIBRATION_CHECKPOINTS if cp <= 45}
+    assert len(st.pred_samples) == 1  # minute 45 clears 10/25/40 at once -> a single sample
