@@ -474,3 +474,40 @@ def test_export_live_loads_only_live_match_histories(cfg, tmp_path, monkeypatch)
 
     assert [b["match_id"] for b in doc["bundles"]] == ["live1"]
     assert loaded == ["live1"]  # finished + stale filtered by the probe, never loaded
+
+
+def test_raw_provider_payload_not_persisted(tmp_path):
+    """The raw provider blob (~61% of the row, never read back) is dropped on persist; the
+    snapshot still round-trips with raw=None and every other field intact."""
+    from wc_kalshi.models.db import Database, MatchSnapshotRow
+
+    db = Database(f"sqlite:///{tmp_path / 'r.sqlite3'}")
+    snap = _match(30, MatchPeriod.FIRST_HALF, 1, 0, ts=T0).model_copy(
+        update={"raw": {"provider_blob": list(range(100))}}
+    )
+    db.add_match_snapshot(snap)
+
+    with db.session() as s:
+        row = s.query(MatchSnapshotRow).one()
+        assert "raw" not in row.data  # the heavy blob never hits storage
+    loaded = db.iter_match_snapshots(snap.match_id)[0]
+    assert loaded.raw is None  # defaults None on load; nothing consumes it
+    assert loaded.minute == 30 and loaded.home_score == 1  # rest of the snapshot preserved
+
+
+def test_hot_per_match_query_uses_composite_index(tmp_path):
+    """The per-match snapshot query (WHERE match_id … ORDER BY ts, id) must ride the composite
+    (match_id, ts) index and need no temp-B-tree sort for the ORDER BY."""
+    from sqlalchemy import text
+
+    from wc_kalshi.models.db import Database
+
+    db = Database(f"sqlite:///{tmp_path / 'i.sqlite3'}")
+    with db.session() as s:
+        plan = s.execute(text(
+            "EXPLAIN QUERY PLAN "
+            "SELECT * FROM match_snapshots WHERE match_id = 'm' ORDER BY ts, id"
+        )).all()
+    detail = " ".join(str(r) for r in plan).lower()
+    assert "ix_match_snapshots_mid_ts" in detail  # composite index drives the scan
+    assert "temp b-tree" not in detail  # ...so the ORDER BY needs no sort step

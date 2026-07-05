@@ -18,6 +18,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     create_engine,
@@ -37,6 +38,10 @@ class Base(DeclarativeBase):
 
 class MatchSnapshotRow(Base):
     __tablename__ = "match_snapshots"
+    # Composite (match_id, ts): the hot per-match query filters match_id + orders by ts, so a
+    # single-column index forced a temp-B-tree sort every time. create_all adds this to
+    # existing DBs on next open.
+    __table_args__ = (Index("ix_match_snapshots_mid_ts", "match_id", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -50,6 +55,7 @@ class MatchSnapshotRow(Base):
 
 class MarketSnapshotRow(Base):
     __tablename__ = "market_snapshots"
+    __table_args__ = (Index("ix_market_snapshots_mid_ts", "match_id", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     market_ticker: Mapped[str] = mapped_column(String(96), index=True)
@@ -68,6 +74,7 @@ class RawMarketQuoteRow(Base):
     Separate from MarketSnapshotRow (which is the typed 1X2 the live strategy trades)."""
 
     __tablename__ = "raw_market_quotes"
+    __table_args__ = (Index("ix_raw_quotes_mid_ticker_ts", "match_id", "market_ticker", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     series: Mapped[str] = mapped_column(String(32), index=True)
@@ -97,6 +104,7 @@ class ProbabilityRow(Base):
 
 class EdgeRow(Base):
     __tablename__ = "edge_signals"
+    __table_args__ = (Index("ix_edge_signals_mid_ts", "match_id", "ts"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(String(64), index=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -214,7 +222,9 @@ class Database:
                     home_score=snap.home_score,
                     away_score=snap.away_score,
                     status=snap.status,
-                    data=snap.model_dump(mode="json"),
+                    # Drop the raw provider payload — ~61% of the blob and never read back
+                    # (raw defaults None, so rows persisted before this still validate fine).
+                    data=snap.model_dump(mode="json", exclude={"raw"}),
                 )
             )
 
