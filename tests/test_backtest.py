@@ -98,3 +98,48 @@ async def test_replay_evaluates_full_sample_despite_daily_loss_limit(cfg, tmp_db
     assert set(res.pnl_by_match) == {"r1", "r2"}
     assert list(res.pnl_by_match.values()) == res.per_match_pnl
     await bt.aclose()
+
+
+def test_bucket_market_by_tick_matches_naive_reference():
+    """The two-pointer bucketer must be byte-for-byte equivalent to the old O(N×M) filter —
+    including the fiddly cases: duplicate match timestamps (empty buckets), a snap exactly on
+    a bucket boundary (belongs to the NEXT tick), and snaps before the first match snap
+    (dropped). Both take ts-sorted inputs; the function only reads `.ts`."""
+    import random
+    from types import SimpleNamespace
+
+    from wc_kalshi.backtest.replay import _bucket_market_by_tick
+
+    def _naive(match_snaps, market_snaps):
+        out = []
+        for i, match in enumerate(match_snaps):
+            lo = match.ts
+            hi = match_snaps[i + 1].ts if i + 1 < len(match_snaps) else None
+            bucket = [s for s in market_snaps if s.ts >= lo and (hi is None or s.ts < hi)]
+            out.append((match, bucket))
+        return out
+
+    def _ns(ts_list):
+        return [SimpleNamespace(ts=t) for t in ts_list]
+
+    def _shape(pairs):
+        return [(m.ts, [s.ts for s in b]) for m, b in pairs]
+
+    cases = [
+        ([10, 20, 30], [10, 15, 20, 25, 35]),  # normal, plus a snap past the last bucket-open
+        ([10, 10, 20], [8, 10, 12, 20]),        # duplicate match ts (empty bucket) + pre-first snap
+        ([10, 20], [10, 20]),                    # boundary: a snap AT hi belongs to the next tick
+        ([10], []),                              # no market snaps
+        ([], [10, 20]),                          # no match snaps
+        ([5, 5, 5], [5, 5]),                     # all-duplicate match ts
+    ]
+    for mts, kts in cases:
+        matches, markets = _ns(mts), _ns(kts)
+        assert _shape(_bucket_market_by_tick(matches, markets)) == _shape(_naive(matches, markets)), (mts, kts)
+
+    rng = random.Random(0)
+    for _ in range(200):
+        mts = sorted(rng.randint(0, 20) for _ in range(rng.randint(0, 8)))
+        kts = sorted(rng.randint(0, 22) for _ in range(rng.randint(0, 15)))
+        matches, markets = _ns(mts), _ns(kts)
+        assert _shape(_bucket_market_by_tick(matches, markets)) == _shape(_naive(matches, markets)), (mts, kts)

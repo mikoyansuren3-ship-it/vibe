@@ -533,15 +533,25 @@ def _bucket_market_by_tick(
 ) -> list[tuple[MatchSnapshot, list[MarketSnapshot]]]:
     """Pair each match snapshot with the market snapshots captured at that tick.
 
-    Market snapshots for tick *i* were written just after match snapshot *i*, so
-    they fall in ``[ts_i, ts_{i+1})``.
+    Market snapshots for tick *i* were written just after match snapshot *i*, so they fall in
+    ``[ts_i, ts_{i+1})``. Both inputs are ts-ordered, so a single two-pointer merge assigns
+    every market snap in O(N+M) — the previous per-tick full scan was O(N×M) (~1.1 s on the
+    largest match, ×3 passes per export). market_snaps is sorted defensively (DB rows already
+    arrive ts-ordered); a stable sort preserves the original within-bucket order.
     """
+    market = sorted(market_snaps, key=lambda s: s.ts)
     out: list[tuple[MatchSnapshot, list[MarketSnapshot]]] = []
+    j, m, n = 0, len(market), len(match_snaps)
     for i, match in enumerate(match_snaps):
         lo = match.ts
-        hi = match_snaps[i + 1].ts if i + 1 < len(match_snaps) else None
-        bucket = [
-            s for s in market_snaps if s.ts >= lo and (hi is None or s.ts < hi)
-        ]
+        hi = match_snaps[i + 1].ts if i + 1 < n else None
+        # Skip anything before this bucket (only bites at i=0 / across empty duplicate-ts
+        # buckets). `< lo` is strict so a snap AT lo stays for this or a later same-ts bucket.
+        while j < m and market[j].ts < lo:
+            j += 1
+        bucket: list[MarketSnapshot] = []
+        while j < m and (hi is None or market[j].ts < hi):
+            bucket.append(market[j])
+            j += 1
         out.append((match, bucket))
     return out
