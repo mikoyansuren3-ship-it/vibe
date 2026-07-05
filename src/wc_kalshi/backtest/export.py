@@ -559,7 +559,7 @@ def _market_model_prob(series, sub, strike, M, home, away):
     return None
 
 
-def _live_market_board(model, last_snap, quote_rows, home, away):
+def _live_market_board(model, last_snap, quote_rows, home, away, *, priced=None):
     """Exhaustive 'every possible bet' board for an in-progress match: the latest
     quote for every captured contract across all series, with the model's price
     where the final-score matrix can compute it (else market-only)."""
@@ -567,7 +567,8 @@ def _live_market_board(model, last_snap, quote_rows, home, away):
         return []
     # Price whenever the match isn't over — live OR a PRE (pre-kickoff) snapshot, whose
     # matrix is the Elo-prior full-time distribution. Only a finished match has no matrix.
-    M = model.scoreline_matrix(last_snap) if not last_snap.period.is_finished else None
+    # ``priced`` (from the caller's one-shot model.price) reuses the shared matrix.
+    M = model.scoreline_matrix(last_snap, priced=priced) if not last_snap.period.is_finished else None
 
     groups: dict[str, list] = {}
     for series, ticker, sub, strike, bid, ask in quote_rows:
@@ -610,6 +611,10 @@ def build_live_bundle(
         return None
     last = match_snaps[-1]
     model = DixonColesInplayModel(cfg.model)
+    # Price the current snapshot's backbone (rates + rho + matrix) ONCE and share it across
+    # the live board, first-to-score, and knockout heads below — they'd otherwise each rebuild
+    # the remaining rates + scoreline matrix for the same snapshot (R5).
+    priced = model.price(last)
     ticks, tickers, preoff = _build_ticks(cfg, match_snaps, market_snaps)
     first = match_snaps[0]
     ctx = first.context
@@ -632,7 +637,7 @@ def build_live_bundle(
         "config": _config_block(cfg, cfg.risk.starting_bankroll, 1.0),
     }
     board = (
-        _live_market_board(model, last, all_quote_rows, first.home_team, first.away_team)
+        _live_market_board(model, last, all_quote_rows, first.home_team, first.away_team, priced=priced)
         if all_quote_rows else []
     )
     quotes = _quotes_by_key(all_quote_rows, first.home_team, first.away_team) if all_quote_rows else {}
@@ -642,13 +647,13 @@ def build_live_bundle(
     # nothing and the captured market-only quote is left as-is. Gated on captured quotes so the
     # live board stays an *enrichment* of real markets (no lone synthesized box).
     if all_quote_rows:
-        fts_groups = _first_to_score_board(model, last, quotes, history=match_snaps)
+        fts_groups = _first_to_score_board(model, last, quotes, history=match_snaps, priced=priced)
         if fts_groups:
             board = fts_groups + [g for g in board if g["series"] not in _FTS_SERIES]
     # Live knockout game: lead with the to-advance / method-of-victory markets (priced off
     # the current in-play state). Group-stage games leave these keys absent.
     if ctx and ctx.is_knockout:
-        ko_groups, advance = _knockout_board(model, last, quotes)
+        ko_groups, advance = _knockout_board(model, last, quotes, priced=priced)
         # Drop any captured advance group from the market board — _knockout_board owns it.
         board = ko_groups + [g for g in board if g["series"] not in _KNOCKOUT_SERIES]
         bundle["is_knockout"] = True
@@ -849,7 +854,7 @@ def _append_offladder_quotes(board, quote_rows, placed_keys, M, home, away) -> N
 
 
 def _knockout_board(
-    model, snap: MatchSnapshot, quotes: dict | None = None
+    model, snap: MatchSnapshot, quotes: dict | None = None, *, priced=None
 ) -> tuple[list[dict[str, Any]], tuple[float, float]]:
     """Model-board groups for a KNOCKOUT game: KXWCADVANCE (2-way, model + market overlay
     where a captured Kalshi quote exists) plus model-only projections — method of advancement,
@@ -857,7 +862,7 @@ def _knockout_board(
     ``(groups, advance)`` with ``advance`` the (home, away) advance probabilities."""
     quotes = quotes or {}
     home, away = snap.home_team, snap.away_team
-    b = knockout_breakdown(model, snap)
+    b = knockout_breakdown(model, snap, priced=priced)
     adv = b["advance"]
 
     def contract(label, model_prob, key=None):
@@ -932,7 +937,7 @@ def _half_board(model, snap: MatchSnapshot, quotes: dict | None = None) -> list[
 
 def _first_to_score_board(
     model, snap: MatchSnapshot, quotes: dict | None = None,
-    history: list[MatchSnapshot] | None = None,
+    history: list[MatchSnapshot] | None = None, *, priced=None,
 ) -> list[dict[str, Any]]:
     """The KXWCFTTS "first team to score" group, priced off the backbone remaining rates
     (competing-Poisson first passage — see modeling/first_to_score.py), model + market overlay
@@ -940,7 +945,7 @@ def _first_to_score_board(
     which both teams have already scored; returns ``[]`` (refuses to price) when it can't —
     and also once the first goal is in, since a settled market is not a projection worth
     surfacing."""
-    fts = first_to_score(model, snap, history=history)
+    fts = first_to_score(model, snap, history=history, priced=priced)
     if fts.ambiguous or fts.settled:
         return []  # nothing to project: either unresolvable or already decided
     quotes = quotes or {}

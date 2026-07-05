@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from ..models.schemas import MatchSnapshot
-from .inplay import DixonColesInplayModel
+from .inplay import DixonColesInplayModel, PricedSnapshot
 
 # P(home wins the shootout | level after extra time). Coin flip by default.
 PENS_HOME_WIN = 0.5
@@ -31,18 +31,15 @@ ET_TOP_N = 6
 def _win_probs(m: np.ndarray) -> tuple[float, float, float]:
     """Collapse a joint score matrix into (home win, draw, away win). Inlined (not imported
     from backtest/export) to keep modeling/ free of a backtest dependency."""
+    # Vectorized sign-collapse on (i−j) — index-grid masks instead of the O(G²) Python loop.
+    # Matches the loop to ~1e-15 (inside the 1e-12 golden tolerance).
     n_h, n_a = m.shape
-    home = draw = away = 0.0
-    for i in range(n_h):
-        for j in range(n_a):
-            v = float(m[i, j])
-            if i > j:
-                home += v
-            elif i == j:
-                draw += v
-            else:
-                away += v
-    return home, draw, away
+    diff = np.arange(n_h)[:, None] - np.arange(n_a)[None, :]
+    return (
+        float(m[diff > 0].sum()),
+        float(m[diff == 0].sum()),
+        float(m[diff < 0].sum()),
+    )
 
 
 def pens_home_win(match: MatchSnapshot) -> float:
@@ -52,14 +49,17 @@ def pens_home_win(match: MatchSnapshot) -> float:
     return PENS_HOME_WIN
 
 
-def knockout_breakdown(model: DixonColesInplayModel, match: MatchSnapshot) -> dict[str, Any]:
+def knockout_breakdown(
+    model: DixonColesInplayModel, match: MatchSnapshot, *, priced: PricedSnapshot | None = None
+) -> dict[str, Any]:
     """Full knockout decomposition from the regulation + extra-time matrices.
 
     Returns ``advance`` (per team, sums to 1), the per-team method-of-victory split
     (win in regulation / extra time / penalties — which sum to ``advance``), ``go_to_extra_time``
     / ``go_to_penalties``, and the top-N extra-time scorelines. Conditional only on the
-    current match state."""
-    m_reg = model.scoreline_matrix(match)
+    current match state. ``priced`` (optional) supplies the shared regulation matrix; the
+    extra-time matrix is knockout-specific and always built here."""
+    m_reg = model.scoreline_matrix(match, priced=priced)
     ph_reg, p_tie_reg, pa_reg = _win_probs(m_reg)
 
     m_et = model.scoreline_matrix_et(match)

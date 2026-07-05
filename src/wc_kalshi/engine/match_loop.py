@@ -200,10 +200,16 @@ class TickProcessor:
         the prior) so Brier/ECE describe predictions across the match timeline."""
         if not match.period.is_live:
             return
-        for cp in CALIBRATION_CHECKPOINTS:
-            if cp not in mstate.checkpoints_seen and match.minute >= cp:
-                mstate.checkpoints_seen.add(cp)
-                mstate.pred_samples.append(probs)
+        # Append the prediction ONCE per tick even if it crosses several checkpoints at once
+        # (sparse capture: a provider gap, half-time, or a mid-match recorder join). The old
+        # per-checkpoint append double-weighted that single snapshot in calibration.
+        crossed = [
+            cp for cp in CALIBRATION_CHECKPOINTS
+            if cp not in mstate.checkpoints_seen and match.minute >= cp
+        ]
+        if crossed:
+            mstate.checkpoints_seen.update(crossed)
+            mstate.pred_samples.append(probs)
 
     # ------------------------------------------------------------------ #
     async def _handle_edge(self, match, edge, market_snaps, mstate, probs=None) -> None:

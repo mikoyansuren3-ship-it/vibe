@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Sequence
 from ..models.schemas import MatchSnapshot
 
 if TYPE_CHECKING:  # avoid a runtime import cycle (inplay imports nothing from here)
-    from .inplay import DixonColesInplayModel
+    from .inplay import DixonColesInplayModel, PricedSnapshot
 
 # Below this combined remaining rate the match is effectively over: treat it as goalless to
 # avoid a 0/0 in the rate split (Λ→0 ⇒ P(no goal)→1).
@@ -123,12 +123,15 @@ def first_to_score(
     model: "DixonColesInplayModel",
     match: MatchSnapshot,
     history: Sequence[MatchSnapshot] | None = None,
+    *,
+    priced: "PricedSnapshot | None" = None,
 ) -> FirstToScore:
     """First-to-score probabilities for ``match``, collapsing once the first goal is in.
 
     ``history`` (the match's snapshot stream) is only consulted to disambiguate a game where
     both teams have already scored; for a 0-0 (live or pre-kickoff) game it is unused and the
-    live projection is priced off the backbone remaining rates."""
+    live projection is priced off the backbone remaining rates. ``priced`` (optional) reuses
+    the shared backbone rates instead of recomputing them."""
     hs, as_ = match.home_score, match.away_score
 
     if hs > 0 or as_ > 0:  # a goal is in — the market is (or should be) settled
@@ -145,6 +148,6 @@ def first_to_score(
     if match.period.is_finished or match.status == "finished":
         return FirstToScore(0.0, 0.0, 1.0, settled=True)  # ended goalless
 
-    lam, mu = model.remaining_rates(match)
+    lam, mu = model.remaining_rates(match, priced=priced)
     p_home, p_away, p_no_goal = first_to_score_rates(lam, mu)
     return FirstToScore(p_home, p_away, p_no_goal, settled=False)

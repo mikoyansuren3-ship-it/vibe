@@ -62,19 +62,17 @@ def outcome_probs(matrix: np.ndarray, current_diff: int = 0) -> tuple[float, flo
     ``current_diff`` = current (home - away) score; the final margin is
     ``current_diff + x - y``.
     """
+    # Vectorized collapse: build the final-margin grid once and sum by sign, instead of an
+    # O(G²) Python loop. `fit_constants` re-runs the predict path ~66× per checkpoint, so this
+    # pays 10–50× there; matches the loop to ~1e-15 (well inside the 1e-12 golden tolerance).
     n = matrix.shape[0]
-    p_home = p_draw = p_away = 0.0
-    for x in range(n):
-        for y in range(n):
-            p = matrix[x, y]
-            final = current_diff + x - y
-            if final > 0:
-                p_home += p
-            elif final == 0:
-                p_draw += p
-            else:
-                p_away += p
-    return p_home, p_draw, p_away
+    idx = np.arange(n)
+    final = current_diff + idx[:, None] - idx[None, :]
+    return (
+        float(matrix[final > 0].sum()),
+        float(matrix[final == 0].sum()),
+        float(matrix[final < 0].sum()),
+    )
 
 
 def one_x_two(
