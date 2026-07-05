@@ -333,11 +333,23 @@ def reject_proposal(rt: "Runtime", proposal_id: str) -> bool:
     return True
 
 
+# Decided (executed/rejected/expired/failed) proposals are kept only to show a short recent
+# list on the dashboard; without a bound they accumulate for the whole run — growing the
+# per-tick expiry scan and the proposals_view dump. Keep well above what the UI surfaces.
+_MAX_DECIDED_PROPOSALS = 50
+
+
 def expire_proposals(rt: "Runtime", now=None) -> None:
     now = now or utcnow()
     for p in rt.proposals.values():
         if p.is_pending and p.expires_ts is not None and p.expires_ts < now:
             p.status = ProposalStatus.EXPIRED
+    # Prune the oldest decided proposals so rt.proposals can't grow without bound. Pending
+    # ones are always kept (they still need a decision); only decided ones beyond the cap go.
+    decided = [p for p in rt.proposals.values() if not p.is_pending]
+    if len(decided) > _MAX_DECIDED_PROPOSALS:
+        for p in sorted(decided, key=lambda p: p.ts, reverse=True)[_MAX_DECIDED_PROPOSALS:]:
+            rt.proposals.pop(p.id, None)
 
 
 def _closing_price_cents(snap: MarketSnapshot | None, action: OrderAction) -> int:

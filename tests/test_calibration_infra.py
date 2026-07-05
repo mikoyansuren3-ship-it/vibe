@@ -112,3 +112,30 @@ def test_calibration_factor_is_memoized_until_add():
     again = tr.calibration_factor()
     assert calls["ece"] == 2  # add() invalidated the memo -> recomputed exactly once
     assert again == tr._calibration_factor()  # cached value is identical to a fresh compute
+
+
+def test_metrics_is_memoized_and_copy_safe():
+    """metrics() is polled by the dashboard every refresh; it must be memoized on the sample
+    count and hand back a COPY so a caller mutating the dict can't poison the cache."""
+    tr = CalibrationTracker(min_samples=5)
+    rng = random.Random(3)
+    for _ in range(20):
+        p = rng.random()
+        q = (1.0 - p) / 2.0
+        tr.add(
+            Probabilities(match_id="m", p_home=p, p_draw=q, p_away=q, source="model"),
+            rng.choice([Outcome.HOME, Outcome.DRAW, Outcome.AWAY]),
+        )
+
+    m1 = tr.metrics()
+    m2 = tr.metrics()
+    assert m1 == m2 and m1 is not m2  # equal values, but distinct objects (defensive copy)
+    m1["brier"] = -999.0  # a caller mutating the result must not leak into the cache
+    assert tr.metrics()["brier"] != -999.0
+
+    n_before = tr.metrics()["n"]
+    tr.add(
+        Probabilities(match_id="m", p_home=0.5, p_draw=0.25, p_away=0.25, source="model"),
+        Outcome.HOME,
+    )
+    assert tr.metrics()["n"] == n_before + 1  # invalidated on add()
