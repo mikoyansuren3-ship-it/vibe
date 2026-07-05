@@ -85,6 +85,7 @@ class TickProcessor:
         # Backtests leave this False and keep the inline per-match behaviour unchanged.
         self._defer_epilogue = defer_book_epilogue
         self._last_eq = 0.0  # monotonic time of last equity-curve sample
+        self._coid_seq = 0  # monotonic suffix so same-minute coids can't collide
 
     async def process(
         self, match: MatchSnapshot, market_snaps: list[MarketSnapshot], mstate: MatchState
@@ -167,6 +168,16 @@ class TickProcessor:
             "model": (probs.p_home, probs.p_draw, probs.p_away),
         }
 
+    def _mint_coid(self, base: str) -> str:
+        """A unique client_order_id per decision. Two decisions on the same
+        match/market/minute/action — a re-fired position stop, or a re-poll landing on the
+        same match minute — would otherwise mint an identical coid and collide on the unique
+        OrderRow.client_order_id column, aborting the tick's persistence *after* the order was
+        placed and booked. A monotonic per-processor suffix makes each unique; capped ≤60 so
+        the exchange (64-char limit) always sees the full, distinct id."""
+        self._coid_seq += 1
+        return f"{base[:48]}:{self._coid_seq}"
+
     def book_epilogue(self) -> None:
         """Whole-book mark-to-market + daily-loss check + dashboard risk/portfolio snapshots
         + equity sample. In live mode the orchestrator calls this ONCE per poll (after the
@@ -246,7 +257,7 @@ class TickProcessor:
 
         # Autonomous: execute immediately.
         snap = next((s for s in market_snaps if s.market_ticker == ticker), None)
-        coid = f"{match.match_id}:{ticker}:{match.minute}:{decision.action.value}"[:60]
+        coid = self._mint_coid(f"{match.match_id}:{ticker}:{match.minute}:{decision.action.value}")
         _result, n_fills = await trading.place_and_book(
             rt,
             coid=coid,
@@ -332,7 +343,7 @@ class TickProcessor:
             action = OrderAction.SELL if net > 0 else OrderAction.BUY
             snap = next((s for s in market_snaps if s.market_ticker == ticker), None)
             price = trading._closing_price_cents(snap, action)
-            coid = f"stop:{ticker}:{match.minute}"[:60]
+            coid = self._mint_coid(f"stop:{ticker}:{match.minute}")
             _result, n_fills = await trading.place_and_book(
                 rt,
                 coid=coid,

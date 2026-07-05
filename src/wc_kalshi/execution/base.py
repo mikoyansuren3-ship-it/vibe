@@ -74,11 +74,20 @@ class Executor(ABC):
     async def place(
         self, order: OrderRequest, market: MarketSnapshot | None = None
     ) -> OrderResult:
-        """Idempotent place: a repeated client_order_id returns the cached result."""
-        if order.client_order_id in self._seen:
-            return self._seen[order.client_order_id]
+        """Idempotent place: a repeated client_order_id returns the cached result.
+
+        Only committed outcomes (accepted/partial/filled) are cached. A REJECTED result is
+        deliberately NOT cached — otherwise a transient failure (network blip, 5xx, timeout)
+        would poison that coid and make it permanently unretryable for the rest of the
+        session. Re-placing a genuinely rejected order is safe: the exchange dedupes on the
+        same client_order_id, so a retry can't double-fire.
+        """
+        cached = self._seen.get(order.client_order_id)
+        if cached is not None:
+            return cached
         result = await self._place(order, market)
-        self._seen[order.client_order_id] = result
+        if result.status in {OrderStatus.ACCEPTED, OrderStatus.PARTIAL, OrderStatus.FILLED}:
+            self._seen[order.client_order_id] = result
         return result
 
     @abstractmethod

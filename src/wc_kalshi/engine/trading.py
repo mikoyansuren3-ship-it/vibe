@@ -25,11 +25,14 @@ from ..models.schemas import (
     ProposalStatus,
     TradeProposal,
 )
+from ..logging_setup import get_logger
 from ..modeling.xg_proxy import observed_xg
 from ..util import new_id, utcnow
 
 if TYPE_CHECKING:
     from .builders import Runtime
+
+log = get_logger("engine.trading")
 
 
 def _outcome_label(match: MatchSnapshot, outcome: Outcome) -> str:
@@ -439,43 +442,53 @@ def proposals_view(rt: "Runtime") -> dict[str, Any]:
 
 
 # --- persistence helpers (moved here so both paths share them) ------------- #
+# The order/fill are already placed on the exchange and booked into the in-memory ledger by
+# the time we persist. A DB error here (e.g. a unique-coid IntegrityError, or a transient
+# write failure) must NOT propagate and abort the rest of the tick — the live ledger is
+# authoritative for the session; we log and carry on rather than lose the booked state.
 def _persist_order(rt: "Runtime", order, result) -> None:
     from ..models.db import OrderRow
 
-    with rt.db.session() as s:
-        s.add(
-            OrderRow(
-                client_order_id=order.client_order_id,
-                exchange_order_id=result.exchange_order_id,
-                match_id=order.match_id,
-                market_ticker=order.market_ticker,
-                ts=utcnow(),
-                action=order.action.value,
-                side=order.side.value,
-                count=order.contracts,
-                price_cents=order.limit_price_cents,
-                status=result.status.value,
-                mode=rt.executor.mode,
-                data={"reason": result.message, "filled": result.filled_contracts},
+    try:
+        with rt.db.session() as s:
+            s.add(
+                OrderRow(
+                    client_order_id=order.client_order_id,
+                    exchange_order_id=result.exchange_order_id,
+                    match_id=order.match_id,
+                    market_ticker=order.market_ticker,
+                    ts=utcnow(),
+                    action=order.action.value,
+                    side=order.side.value,
+                    count=order.contracts,
+                    price_cents=order.limit_price_cents,
+                    status=result.status.value,
+                    mode=rt.executor.mode,
+                    data={"reason": result.message, "filled": result.filled_contracts},
+                )
             )
-        )
+    except Exception as exc:  # noqa: BLE001 - persistence must not unwind a booked tick
+        log.warning("order persist failed", extra={"coid": order.client_order_id, "err": str(exc)})
 
 
 def _persist_fill(rt: "Runtime", fill) -> None:
     from ..models.db import FillRow
 
-    with rt.db.session() as s:
-        s.add(
-            FillRow(
-                client_order_id=fill.client_order_id,
-                match_id=fill.match_id,
-                market_ticker=fill.market_ticker,
-                ts=utcnow(),
-                action=fill.action.value,
-                side="yes",
-                count=fill.contracts,
-                price_cents=fill.price_cents,
-                fee=fill.fee,
-                data={},
+    try:
+        with rt.db.session() as s:
+            s.add(
+                FillRow(
+                    client_order_id=fill.client_order_id,
+                    match_id=fill.match_id,
+                    market_ticker=fill.market_ticker,
+                    ts=utcnow(),
+                    action=fill.action.value,
+                    side="yes",
+                    count=fill.contracts,
+                    price_cents=fill.price_cents,
+                    fee=fill.fee,
+                    data={},
+                )
             )
-        )
+    except Exception as exc:  # noqa: BLE001 - persistence must not unwind a booked tick
+        log.warning("fill persist failed", extra={"coid": fill.client_order_id, "err": str(exc)})
