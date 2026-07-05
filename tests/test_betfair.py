@@ -100,3 +100,30 @@ def test_merge_never_attaches_future_quotes():
     assert "markets" not in ticks[0]  # 10' quote is in the tick's future
     assert ticks[1]["markets"] == {"home": 0.40}  # carried forward from 10'
     assert "markets" not in ticks[2]  # 15' is future; 10' is 4' old (> tolerance)
+
+
+def test_non_match_odds_markets_are_filtered_before_accumulating(tmp_path):
+    """Only MATCH_ODDS markets become timelines; other market types are dropped at ingest
+    (not buffered then discarded), so a PRO archive doesn't balloon RAM."""
+    extra = json.dumps({"pt": 970000, "mc": [{
+        "id": "9.999",
+        "marketDefinition": {"marketType": "CORRECT_SCORE"},
+        "rc": [{"id": 1, "ltp": 5.0}],
+    }]})
+    mixed = tmp_path / "mixed.ndjson"
+    mixed.write_text(STREAM.read_text().rstrip() + "\n" + extra + "\n")
+    ids = {tl.market_id for tl in parse_stream_path(mixed)}
+    assert ids == {"1.111"}  # the CORRECT_SCORE market never becomes a timeline
+
+
+def test_bz2_stream_parses_identically_to_plain(tmp_path):
+    """The streaming .bz2 path (no whole-file read into RAM) yields the same parse as plain."""
+    import bz2
+
+    comp = tmp_path / "s.ndjson.bz2"
+    comp.write_bytes(bz2.compress(STREAM.read_bytes()))
+    (plain,) = parse_stream_path(STREAM)
+    (streamed,) = parse_stream_path(comp)
+    assert streamed.market_id == plain.market_id
+    assert streamed.runners == plain.runners
+    assert streamed.clock_mode == plain.clock_mode

@@ -271,9 +271,12 @@ class Backtester:
         # isolated DB so they never touch live data.
         self.cfg = cfg.model_copy(deep=True)
         self.cfg.mode = RunMode.PAPER
+        # Only a scratch DB WE created gets torn down in aclose (a caller-supplied db is theirs).
+        self._temp_db_path: str | None = None
         if db is None:
             fd, path = tempfile.mkstemp(prefix="wck-backtest-", suffix=".sqlite3")
             os.close(fd)
+            self._temp_db_path = path
             db = Database(f"sqlite:///{path}")
         self.rt: Runtime = build_runtime(self.cfg, db=db)
         self.rt.audit.enabled = False  # backtests don't need the audit trail (speed)
@@ -526,6 +529,17 @@ class Backtester:
 
     async def aclose(self) -> None:
         await self.rt.aclose()
+        # Tear down the scratch DB we created: dispose the engine pool to release its file
+        # handles, then unlink the sqlite file and any WAL/SHM/journal siblings. Otherwise
+        # every export run leaks a temp file + a connection pool.
+        if self._temp_db_path is not None:
+            self.rt.db.engine.dispose()
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                try:
+                    os.unlink(self._temp_db_path + suffix)
+                except FileNotFoundError:
+                    pass
+            self._temp_db_path = None
 
 
 def _bucket_market_by_tick(

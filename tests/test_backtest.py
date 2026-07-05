@@ -143,3 +143,16 @@ def test_bucket_market_by_tick_matches_naive_reference():
         kts = sorted(rng.randint(0, 22) for _ in range(rng.randint(0, 15)))
         matches, markets = _ns(mts), _ns(kts)
         assert _shape(_bucket_market_by_tick(matches, markets)) == _shape(_naive(matches, markets)), (mts, kts)
+
+
+async def test_backtester_removes_its_scratch_db_on_close(cfg):
+    """A Backtester that created its own scratch DB must unlink it (and any WAL/SHM siblings)
+    on aclose — otherwise every export run leaks a temp sqlite file + a connection pool."""
+    import os
+
+    bt = Backtester(cfg)  # db=None -> mkstemp scratch DB
+    path = bt._temp_db_path
+    assert path and os.path.exists(path)
+    await bt.aclose()
+    assert bt._temp_db_path is None
+    assert not os.path.exists(path)
