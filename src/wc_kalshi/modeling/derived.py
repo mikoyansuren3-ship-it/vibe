@@ -19,11 +19,10 @@ Side = str  # "home" | "away"
 def total_goals_pmf(m: np.ndarray) -> np.ndarray:
     """P(total goals = k) for k = 0 .. (max_home+max_away)."""
     n_h, n_a = m.shape
-    pmf = np.zeros(n_h + n_a - 1)
-    for i in range(n_h):
-        for j in range(n_a):
-            pmf[i + j] += m[i, j]
-    return pmf
+    # Anti-diagonal collapse via bincount on (i+j): bincount accumulates in the SAME C order
+    # the loop did, so this is bit-identical, not just close. O(G²) loop → one vectorized op.
+    totals = (np.arange(n_h)[:, None] + np.arange(n_a)[None, :]).ravel()
+    return np.bincount(totals, weights=m.ravel(), minlength=n_h + n_a - 1)
 
 
 def prob_total_over(m: np.ndarray, line: float) -> float:
@@ -65,12 +64,12 @@ def supremacy_pmf(m: np.ndarray) -> dict[int, float]:
     supremacy distribution — the basis for margin / spread / Asian-handicap pricing (each is
     a sum over the relevant margins). Generalises ``prob_margin``."""
     n_h, n_a = m.shape
-    out: dict[int, float] = {}
-    for i in range(n_h):
-        for j in range(n_a):
-            d = i - j
-            out[d] = out.get(d, 0.0) + float(m[i, j])
-    return out
+    # bincount on the margin (i−j), shifted so the minimum margin −(n_a−1) lands in bin 0.
+    # Same C-order accumulation as the loop → bit-identical; keys span the full margin range.
+    shift = n_a - 1
+    diffs = (np.arange(n_h)[:, None] - np.arange(n_a)[None, :]).ravel() + shift
+    binned = np.bincount(diffs, weights=m.ravel(), minlength=n_h + n_a - 1)
+    return {int(k - shift): float(v) for k, v in enumerate(binned)}
 
 
 def prob_spread(m: np.ndarray, side: Side, line: float) -> float:

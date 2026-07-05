@@ -31,18 +31,15 @@ ET_TOP_N = 6
 def _win_probs(m: np.ndarray) -> tuple[float, float, float]:
     """Collapse a joint score matrix into (home win, draw, away win). Inlined (not imported
     from backtest/export) to keep modeling/ free of a backtest dependency."""
+    # Vectorized sign-collapse on (i−j) — index-grid masks instead of the O(G²) Python loop.
+    # Matches the loop to ~1e-15 (inside the 1e-12 golden tolerance).
     n_h, n_a = m.shape
-    home = draw = away = 0.0
-    for i in range(n_h):
-        for j in range(n_a):
-            v = float(m[i, j])
-            if i > j:
-                home += v
-            elif i == j:
-                draw += v
-            else:
-                away += v
-    return home, draw, away
+    diff = np.arange(n_h)[:, None] - np.arange(n_a)[None, :]
+    return (
+        float(m[diff > 0].sum()),
+        float(m[diff == 0].sum()),
+        float(m[diff < 0].sum()),
+    )
 
 
 def pens_home_win(match: MatchSnapshot) -> float:
