@@ -10,7 +10,7 @@ import { runBundle } from "../../lib/sim/engine";
 import { evaluateTick } from "../../lib/sim/policy";
 import { evalContract } from "../../lib/sim/markets";
 import { outcomeName, OUT_HEX } from "../../lib/format";
-import type { Bundle, Filters, LiveContract, OutcomeKey } from "../../lib/sim/types";
+import type { Bundle, Filters, LiveContract, LiveMarketGroup, OutcomeKey } from "../../lib/sim/types";
 import { cls, DualBars, pct, signed } from "../bits";
 
 const sMoney = (x: number) => (x >= 0 ? "+" : "−") + "$" + Math.abs(x).toFixed(2);
@@ -25,6 +25,7 @@ interface Line {
   action: "buy" | "sell" | null;
   meetsBar: boolean; // clears the edge bar in isolation
   taken: boolean;    // the engine would actually take this (1X2 strongest leg per tick only)
+  unvalidated?: boolean; // knockout market — priced but not CLV-validated, never traded
 }
 
 function EdgeCell({ ln }: { ln: Line }) {
@@ -32,10 +33,16 @@ function EdgeCell({ ln }: { ln: Line }) {
   const verb = ln.action === "buy" ? "back" : ln.action === "sell" ? "fade" : "—";
   return (
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-      <span className={`mono ${cls(ln.edge ?? 0)}`} title="model − market" style={{ minWidth: 52, textAlign: "right" }}>
+      <span
+        className={`mono ${ln.unvalidated ? "" : cls(ln.edge ?? 0)}`}
+        title="model − market"
+        style={{ minWidth: 52, textAlign: "right", color: ln.unvalidated ? "var(--faint)" : undefined }}
+      >
         {ln.edge == null ? "" : signed(ln.edge, 2)}
       </span>
-      {ln.taken ? (
+      {ln.unvalidated ? (
+        <span className="note" style={{ margin: 0, fontSize: 11 }} title="A knockout tie can't be settled from the 90′ score, so the bot never trades it — this comparison is unvalidated.">not CLV-validated</span>
+      ) : ln.taken ? (
         <span className={`tag2 ${ln.action === "buy" ? "back" : "fade"}`} title="the engine takes this leg (strongest 1X2 leg this tick)">{verb} ✓</span>
       ) : ln.meetsBar ? (
         <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }} title="clears the edge bar in isolation — but the engine trades only 1X2 and only the strongest leg per tick">meets bar</span>
@@ -89,6 +96,26 @@ function contractToLine(c: LiveContract, cfg: Bundle["config"]): Line {
   // The engine trades ONLY 1X2 — the derived board is research-only, so taken is always
   // false here regardless of edge. meetsBar flags contracts that merely clear the bar.
   return { label: c.label, modelP: s.modelP, mid: s.mid, edge: s.edge, action: s.action, meetsBar: s.meetsBar, taken: false };
+}
+
+// Knockout markets Kalshi lists no market for — model-only projections.
+const KO_PROJECTION_SERIES = new Set(["KXWCMOV", "KXWCTOET", "KXWCTOPENS", "KXWCETSCORE"]);
+// Every knockout-specific series. NONE is CLV-validated: a knockout tie is settled in extra
+// time / on penalties, which can't be derived from the 90′ score (see modeling/knockout.py +
+// export._derived_settles_yes). So the bot never trades them and the board must suppress any
+// would-bet signal on them — they're shown for transparency only.
+const KNOCKOUT_SERIES = new Set([...KO_PROJECTION_SERIES, "KXWCADVANCE"]);
+const KO_CAVEAT = "not CLV-validated — a knockout tie can't be settled from the 90′ score, so the bot never trades it";
+
+// Contracts → board lines with the knockout honesty gate applied: knockout markets stay
+// visible (model vs market) but are flagged unvalidated and can never read as "taken"/"meets bar".
+function groupLines(g: LiveMarketGroup, cfg: Bundle["config"]): Line[] {
+  const ko = KNOCKOUT_SERIES.has(g.series);
+  return g.contracts.map((c) => {
+    const ln = contractToLine(c, cfg);
+    if (ko) { ln.unvalidated = true; ln.meetsBar = false; ln.taken = false; }
+    return ln;
+  });
 }
 
 function LiveGame({ bundle, bankroll, kellyFraction, filters }: {
@@ -177,10 +204,14 @@ function LiveGame({ bundle, bankroll, kellyFraction, filters }: {
       {/* Every possible bet. Only the 1X2 group is tradeable (≤1 leg/tick); the rest is research. */}
       <Group title="Match result (1X2)" sub="the only market the bot trades — at most one leg per tick" lines={oneX2} openDefault />
       {priceable.map((g) => (
-        <Group key={g.series} title={g.label} sub="model-priced — research only; the bot doesn't trade this" lines={g.contracts.map((c) => contractToLine(c, bundle.config))} />
+        <Group key={g.series} title={g.label}
+          sub={KNOCKOUT_SERIES.has(g.series) ? KO_CAVEAT : "model-priced — research only; the bot doesn't trade this"}
+          lines={groupLines(g, bundle.config)} />
       ))}
       {marketOnly.map((g) => (
-        <Group key={g.series} title={g.label} sub="market price only — the model can't price this" lines={g.contracts.map((c) => contractToLine(c, bundle.config))} />
+        <Group key={g.series} title={g.label}
+          sub={KNOCKOUT_SERIES.has(g.series) ? KO_CAVEAT : "market price only — the model can't price this"}
+          lines={groupLines(g, bundle.config)} />
       ))}
     </div>
   );
@@ -204,9 +235,6 @@ function kickoffLabel(iso?: string | null): string {
   if (hrs < 24) return `kickoff in ${hrs}h ${mins % 60}m`;
   return `kickoff in ${Math.floor(hrs / 24)}d ${hrs % 24}h`;
 }
-
-// Knockout projection series Kalshi doesn't list a market for (model-only).
-const KO_PROJECTION_SERIES = new Set(["KXWCMOV", "KXWCTOET", "KXWCTOPENS", "KXWCETSCORE"]);
 
 // A future game projected as a big rectangle. Group stage: a 1X2 headline + every market's
 // probability. Knockout: a 2-way "to advance" headline (includes ET + penalties) + the
@@ -240,16 +268,23 @@ function UpcomingGame({ bundle }: { bundle: Bundle }) {
         <span className="rect-kick mono">{kickoffLabel(bundle.kickoff)}</span>
       </div>
       {isKO && <div className="note" style={{ margin: "0 0 2px" }}>To advance — includes extra time &amp; penalties</div>}
-      <DualBars labels={headLabels} model={headModel} market={headMarket} colors={headColors} showEdge={hasMarket} />
+      <DualBars labels={headLabels} model={headModel} market={headMarket} colors={headColors} showEdge={isKO ? false : hasMarket} />
+      {isKO && (
+        <div className="konote">
+          Knockout markets are <b>not CLV-validated</b> — a tie is decided in extra time or on penalties, which can’t be settled from the 90′ score. The bot never trades these; shown for transparency.
+        </div>
+      )}
       {rest.map((g) => {
+        const koProj = KO_PROJECTION_SERIES.has(g.series);
         const title = isKO && g.series === "KXWCGAME" ? "Match result (regulation)" : g.label;
-        const sub = KO_PROJECTION_SERIES.has(g.series)
-          ? "model projection — Kalshi has no market for this"
+        const sub = koProj
+          ? "model projection — Kalshi lists no market · not CLV-validated"
           : hasMarket ? "model probability vs market — projection only" : "model probability — no market open yet";
         return (
           <Group key={g.series} title={title} sub={sub}
             lines={g.contracts.map((c) => {
               const ln = contractToLine(c, bundle.config);
+              if (koProj) { ln.unvalidated = true; ln.meetsBar = false; }
               if (isKO && g.series === "KXWCGAME" && /draw|tie/i.test(c.label)) ln.label = "Draw → extra time";
               return ln;
             })} />

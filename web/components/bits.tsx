@@ -18,6 +18,20 @@ export function Tile({ k, v, c }: { k: string; v: string; c?: string }) {
   );
 }
 
+/** Competition-stage pill (e.g. "Round of 16"). Knockout ties get an accent so the
+ *  stage change reads at a glance. Renders nothing for stage-less (group) bundles. */
+export function StageBadge({ round, knockout }: { round?: string | null; knockout?: boolean }) {
+  if (!round) return null;
+  return (
+    <span
+      className={`stagebadge${knockout ? " ko" : ""}`}
+      title={knockout ? "Knockout tie — winner decided incl. extra time & penalties" : undefined}
+    >
+      {round}
+    </span>
+  );
+}
+
 /** Stacked model (top) / market (bottom) probability bars + edge readout. N-way: the 1X2
  *  callers pass length-3 arrays; the knockout "to advance" headline passes length-2. */
 export function DualBars({
