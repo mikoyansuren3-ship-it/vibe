@@ -57,7 +57,9 @@ export function Markets({ bundles, adv }: { bundles: Bundle[]; adv: boolean }) {
     );
   }
 
-  const dv = game?.derived ?? [];
+  // Drop any derived market with no ticks — MarketRow + the Brier reduce below both read
+  // ticks[0], so an empty series would crash the tab.
+  const dv = (game?.derived ?? []).filter((m) => m.ticks.length > 0);
   // Honest accuracy: opening Brier, model vs market, across this game's contracts.
   const bm = dv.reduce((s, m) => s + (m.ticks[0][1] - (m.settled_yes ? 1 : 0)) ** 2, 0) / (dv.length || 1);
   const bk = dv.reduce((s, m) => s + (m.ticks[0][2] - (m.settled_yes ? 1 : 0)) ** 2, 0) / (dv.length || 1);

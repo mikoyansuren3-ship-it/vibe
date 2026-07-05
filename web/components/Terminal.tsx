@@ -56,12 +56,29 @@ export function Terminal({
   useEffect(() => {
     if (timer.current) clearInterval(timer.current);
     if (!playing) return;
+    // Play at `speed`× real time: fire the timer at most 16×/s and advance enough ticks per
+    // fire that ticks/second === speed. The old `speed/4` divisor over-ran the high options
+    // (16× actually ran 64×, 64× ran 256×).
+    const fps = Math.min(speed, 16);
+    const perFire = Math.max(1, Math.round(speed / fps));
     timer.current = setInterval(() => {
-      setIdx((i) => { if (i >= n - 1) { setPlaying(false); followLive.current = true; return i; } return Math.min(n - 1, i + Math.max(1, Math.round(speed / 4))); });
-    }, 1000 / Math.min(speed, 16));
+      setIdx((i) => { if (i >= n - 1) { setPlaying(false); followLive.current = true; return i; } return Math.min(n - 1, i + perFire); });
+    }, 1000 / fps);
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [playing, speed, n]);
 
+  // Zero-tick bundle (e.g. a live match captured with no snapshots yet): every access below
+  // indexes ticks[...], so bail with a placeholder rather than white-screening the app.
+  if (n === 0) {
+    return (
+      <div className="panel">
+        <div className="matchup">
+          <div className="teams">{bundle.home_team} <span style={{ color: "var(--faint)" }}>vs</span> {bundle.away_team}</div>
+        </div>
+        <div className="note" style={{ marginTop: 12 }}>No ticks captured for this match yet.</div>
+      </div>
+    );
+  }
   const tick = bundle.ticks[Math.min(idx, n - 1)];
   const fillsSoFar = result.fills.filter((f) => f.tickIndex <= idx);
   const consideredN = result.decisions.filter((d) => d.category !== "taken").length;
@@ -91,10 +108,10 @@ export function Terminal({
         <div className="timeline">
           <div className="track"><div className="played" style={{ width: `${playedFrac}%` }} /></div>
           {goals.map((g, i) => (
-            <span key={`g${i}`} className="marker goal" style={{ left: `${Math.min(100, (g.minute / 90) * 100)}%` }} title={`${g.team} goal ${g.minute}'`}>⚽</span>
+            <span key={`g${i}`} className="marker goal" style={{ left: `${(g.tickIndex / Math.max(1, n - 1)) * 100}%` }} title={`${g.team} goal ${g.minute}'`}>⚽</span>
           ))}
           {result.fills.map((f, i) => (
-            <span key={`f${i}`} className={`marker fill ${f.action}`} style={{ left: `${Math.min(100, (f.minute / 90) * 100)}%` }} title={`${f.action} ${f.outcome} ${f.minute}'`} />
+            <span key={`f${i}`} className={`marker fill ${f.action}`} style={{ left: `${(f.tickIndex / Math.max(1, n - 1)) * 100}%` }} title={`${f.action} ${f.outcome} ${f.minute}'`} />
           ))}
           <input type="range" min={0} max={n - 1} value={idx} onChange={(e) => { setPlaying(false); const v = Number(e.target.value); setIdx(v); followLive.current = v >= n - 1; }} />
         </div>
