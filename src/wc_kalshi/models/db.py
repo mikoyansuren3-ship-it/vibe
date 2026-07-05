@@ -13,7 +13,18 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine, event, select
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    create_engine,
+    event,
+    func,
+    select,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from ..util import utcnow
@@ -321,6 +332,22 @@ class Database:
                 .order_by(MatchSnapshotRow.match_id)
             ).scalars().all()
             return list(rows)
+
+    def latest_match_snapshot_meta(self) -> list[tuple[str, str, datetime]]:
+        """``(match_id, period, ts)`` for the LAST snapshot of each match, read from the
+        promoted columns only (no ``data`` blob). One indexed query via
+        ``id IN (SELECT MAX(id) … GROUP BY match_id)`` instead of loading + validating every
+        match's full snapshot history — lets a caller find the handful of live matches in ~ms
+        regardless of table size. Ordered by match_id for deterministic iteration."""
+        R = MatchSnapshotRow
+        with self.session() as s:
+            latest_ids = select(func.max(R.id)).group_by(R.match_id).scalar_subquery()
+            rows = s.execute(
+                select(R.match_id, R.period, R.ts)
+                .where(R.id.in_(latest_ids))
+                .order_by(R.match_id)
+            ).all()
+            return [(r.match_id, r.period, r.ts) for r in rows]
 
     def iter_match_snapshots(self, match_id: str) -> list[MatchSnapshot]:
         with self.session() as s:

@@ -420,3 +420,57 @@ def test_export_live_includes_upcoming(cfg, tmp_path):
     assert kos == sorted(kos, key=lambda k: (k is None, k or ""))
     written = json.loads((tmp_path / "out" / "live.json").read_text())
     assert len(written["upcoming"]) == len(doc["upcoming"])
+
+
+def test_latest_match_snapshot_meta_probes_last_row_per_match(tmp_path):
+    """The SQL probe returns the LAST snapshot's (period, ts) per match from promoted columns
+    only — the cheap basis for finding live matches without loading every history."""
+    from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
+
+    db = Database(f"sqlite:///{tmp_path / 'p.sqlite3'}")
+    t0 = utcnow() - timedelta(minutes=60)
+    _persist_match(db, "m1", [
+        _match(1, MatchPeriod.FIRST_HALF, 0, 0, ts=t0),
+        _match(80, MatchPeriod.SECOND_HALF, 2, 0, ts=t0 + timedelta(minutes=80)),
+    ], [])
+    _persist_match(db, "m2", [
+        _match(90, MatchPeriod.FULL_TIME, 1, 1, ts=t0 + timedelta(minutes=95), status="finished"),
+    ], [])
+
+    meta = {mid: period for mid, period, _ts in db.latest_match_snapshot_meta()}
+    assert set(meta) == {"m1", "m2"}
+    assert meta["m1"] == MatchPeriod.SECOND_HALF.value  # the LAST row's period, not the first
+    assert meta["m2"] == MatchPeriod.FULL_TIME.value
+
+
+def test_export_live_loads_only_live_match_histories(cfg, tmp_path, monkeypatch):
+    """The probe keeps export O(live): iter_match_snapshots runs only for matches the cheap
+    (period, ts) probe flags live — never for finished or stale ones."""
+    from wc_kalshi.backtest.export import export_live
+    from wc_kalshi.models.db import Database
+    from wc_kalshi.util import utcnow
+
+    db_url = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_url)
+    t0 = utcnow() - timedelta(minutes=40)
+    _persist_match(db, "live1", [_match(30, MatchPeriod.FIRST_HALF, 0, 0, ts=t0)],
+                   [_mkt(Outcome.HOME, "H", 60, 62, ts=t0)])
+    _persist_match(db, "done1",
+                   [_match(90, MatchPeriod.FULL_TIME, 2, 1, ts=t0, status="finished")], [])
+    old = utcnow() - timedelta(hours=6)  # live-looking last snapshot but past the 3h cutoff
+    _persist_match(db, "stale1", [_match(30, MatchPeriod.FIRST_HALF, 0, 0, ts=old)],
+                   [_mkt(Outcome.HOME, "H", 60, 62, ts=old)])
+
+    loaded: list[str] = []
+    real = Database.iter_match_snapshots
+
+    def spy(self, mid):
+        loaded.append(mid)
+        return real(self, mid)
+
+    monkeypatch.setattr(Database, "iter_match_snapshots", spy)
+    doc = asyncio.run(export_live(cfg, db_url, str(tmp_path / "out")))
+
+    assert [b["match_id"] for b in doc["bundles"]] == ["live1"]
+    assert loaded == ["live1"]  # finished + stale filtered by the probe, never loaded

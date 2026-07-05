@@ -24,7 +24,7 @@ from typing import Any
 from ..config import REPO_ROOT, AppConfig
 from ..logging_setup import get_logger
 from ..models.db import Database
-from ..models.schemas import MatchSnapshot
+from ..models.schemas import MatchPeriod, MatchSnapshot
 from ..modeling.derived import (
     prob_btts, prob_correct_score, prob_spread, prob_team_total_over, prob_total_over,
 )
@@ -1085,27 +1085,36 @@ async def export_live(cfg: AppConfig, db_path: str, out_dir: str) -> dict[str, A
     live: list[tuple[Any, dict[str, Any]]] = []
     live_ids: set[str] = set()
     now = datetime.now(timezone.utc)
-    for mid in src.match_ids():
-        snaps = src.iter_match_snapshots(mid)
-        if snaps and snaps[-1].period.is_live and not snaps[-1].period.is_finished:
-            # Staleness cutoff: a match whose FT snapshot was never captured (recorder
-            # crash, or the orchestrator gave up settling) keeps a live-looking last
-            # snapshot FOREVER — without a cutoff the 60s publisher would re-export it
-            # as an in-progress game for the rest of the tournament.
-            last_ts = snaps[-1].ts
-            if last_ts.tzinfo is None:
-                last_ts = last_ts.replace(tzinfo=timezone.utc)
-            if now - last_ts > _LIVE_STALE_AFTER:
-                log.warning(
-                    "match looks live but is stale — excluding from live export",
-                    extra={"match_id": mid, "last_snapshot_ts": last_ts.isoformat()},
-                )
-                continue
-            live_ids.add(mid)
-            quotes = _read_all_quotes(db_path, mid)
-            b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid), quotes)
-            if b is not None:
-                live.append((snaps[-1].ts, b))
+    # Cheap SQL probe: the last snapshot's promoted (period, ts) per match, NOT the whole
+    # table. Only the 0–4 matches that are actually live get their full history loaded below,
+    # so this stays O(live) instead of O(all matches ever recorded).
+    for mid, period_str, last_ts in src.latest_match_snapshot_meta():
+        try:
+            period = MatchPeriod(period_str)
+        except ValueError:  # unknown/legacy period string — treat as not-live
+            continue
+        if not (period.is_live and not period.is_finished):
+            continue
+        # Staleness cutoff: a match whose FT snapshot was never captured (recorder crash, or
+        # the orchestrator gave up settling) keeps a live-looking last snapshot FOREVER —
+        # without a cutoff the 60s publisher would re-export it as an in-progress game for the
+        # rest of the tournament.
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        if now - last_ts > _LIVE_STALE_AFTER:
+            log.warning(
+                "match looks live but is stale — excluding from live export",
+                extra={"match_id": mid, "last_snapshot_ts": last_ts.isoformat()},
+            )
+            continue
+        snaps = src.iter_match_snapshots(mid)  # load the full history ONLY for a live match
+        if not snaps:
+            continue
+        live_ids.add(mid)
+        quotes = _read_all_quotes(db_path, mid)
+        b = build_live_bundle(cfg, mid, snaps, src.iter_market_snapshots(mid), quotes)
+        if b is not None:
+            live.append((snaps[-1].ts, b))
 
     # Most-recently-updated match first (its bundle is the back-compat ``bundle``).
     live.sort(key=lambda x: x[0], reverse=True)
