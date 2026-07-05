@@ -5,12 +5,43 @@ from datetime import timedelta
 
 import pytest
 
+from wc_kalshi.engine import trading
 from wc_kalshi.engine.builders import build_runtime
 from wc_kalshi.engine.orchestrator import Orchestrator
 from wc_kalshi.engine.trading import flatten_all, sweep_resting_orders
+from wc_kalshi.execution.base import Executor, Fill
 from wc_kalshi.ingestion.football.base import FootballDataProvider
 from wc_kalshi.models.schemas import MatchPeriod, OrderAction, Outcome
 from wc_kalshi.util import utcnow
+
+
+class _LateFillExecutor(Executor):
+    """Stub live-style executor: ``fills_for`` returns a controllable, growing fill set so we
+    can drive late-fill reconciliation deterministically."""
+
+    def __init__(self):
+        super().__init__()
+        self.fills: list[Fill] = []
+        self.canceled: list[str] = []
+
+    async def _place(self, order, market):  # pragma: no cover - placement not exercised here
+        raise AssertionError("placement not used in reconcile tests")
+
+    async def fills_for(self, oid, **kw):
+        return list(self.fills)
+
+    async def cancel(self, oid):
+        self.canceled.append(oid)
+        return True
+
+
+def _rest(rt, oid="EX-1", *, booked=0, stale=False):
+    rt.resting_orders[oid] = {
+        "coid": "c", "match_id": "m1", "market_ticker": "T1", "outcome": Outcome.HOME,
+        "action": OrderAction.BUY, "cost_per_contract": 0.5, "limit_price_cents": 50,
+        "booked": booked, "minute": 30,
+        "placed_ts": utcnow() - timedelta(seconds=120 if stale else 0),
+    }
 
 
 @pytest.fixture
@@ -345,3 +376,48 @@ async def test_orchestrator_marks_whole_book_once_per_poll(rt, match_factory):
 
     assert calls["epi"] == 1  # one epilogue for the whole poll, regardless of match count
     assert calls["uu"] == 1  # ...and the whole-book mark ran once, not three times
+
+
+async def test_reconcile_books_late_fills_exactly_once(rt):
+    """A resting order that fills after placement is booked by reconcile — and only the
+    increment each pass (info['booked'] tracks the running total), so repeated reconciles
+    can't double-count."""
+    ex = _LateFillExecutor()
+    rt.executor = ex
+    _rest(rt)
+
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 0  # nothing filled yet
+    ex.fills = [Fill("c", "m1", "T1", OrderAction.BUY, 10, 50, 0.1)]
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 10  # booked once
+    assert rt.portfolio.positions["T1"].yes_contracts == 10
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 0  # idempotent
+    assert rt.portfolio.positions["T1"].yes_contracts == 10
+    ex.fills.append(Fill("c", "m1", "T1", OrderAction.BUY, 5, 51, 0.05))
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 5  # only the increment
+    assert rt.portfolio.positions["T1"].yes_contracts == 15
+
+
+async def test_sweep_reconciles_late_fill_before_cancelling_stale(rt):
+    """Sweep books a fill that landed on a resting order before ageing it out — the late
+    fill must not be lost when the stale order is cancelled."""
+    ex = _LateFillExecutor()
+    rt.executor = ex
+    _rest(rt, stale=True)
+    ex.fills = [Fill("c", "m1", "T1", OrderAction.BUY, 8, 50, 0.08)]
+
+    canceled = await sweep_resting_orders(rt, timeout_seconds=60)
+    assert canceled == 1
+    assert "EX-1" in ex.canceled
+    assert "EX-1" not in rt.resting_orders  # dropped after cancel
+    assert rt.portfolio.positions["T1"].yes_contracts == 8  # late fill booked before the cancel
+
+
+async def test_paper_executor_reports_no_late_fills():
+    """Paper/IOC orders never rest, so the reconciler is a no-op there (backtests unaffected)."""
+    from wc_kalshi.execution.paper import PaperExecutor
+
+    ex = PaperExecutor()
+    assert await ex.fills_for(
+        "x", market_ticker="t", action=OrderAction.BUY, match_id="m",
+        client_order_id="c", fallback_price_cents=50,
+    ) == []

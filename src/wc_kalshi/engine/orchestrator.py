@@ -173,6 +173,11 @@ class Orchestrator:
                     "captured final state",
                     extra={"match_id": mid, "score": f"{snap.home_score}-{snap.away_score}"},
                 )
+                # Book any late fills on this match's resting orders before it leaves the
+                # watch set, so the settled position reflects the true exchange fills.
+                from .trading import reconcile_resting_orders
+
+                await reconcile_resting_orders(self.rt, match_id=mid)
                 await self._handle(snap)
             elif self._pending_settle[mid] >= self._settle_max_attempts:
                 log.warning("settlement gave up (never reported FT)", extra={"match_id": mid})

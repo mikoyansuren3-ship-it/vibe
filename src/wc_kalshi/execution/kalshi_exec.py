@@ -81,7 +81,14 @@ class KalshiExecutor(Executor):
         # Prefer REAL fills from the exchange over the create-order estimate.
         real_fills: list[Fill] | None = None
         if self.reconcile_fills and exch_id:
-            real_fills = await self._reconcile(order, str(exch_id))
+            real_fills = await self._fills_from_exchange(
+                str(exch_id),
+                market_ticker=order.market_ticker,
+                action=order.action,
+                match_id=order.match_id,
+                client_order_id=order.client_order_id,
+                fallback_price_cents=order.limit_price_cents,
+            )
 
         if real_fills is not None:
             fills = real_fills
@@ -137,30 +144,62 @@ class KalshiExecutor(Executor):
             fills=fills,
         )
 
-    async def _reconcile(self, order: OrderRequest, exch_id: str) -> list[Fill] | None:
-        """Read actual fills for this order and convert to Yes-terms Fill objects.
+    async def fills_for(
+        self,
+        exchange_order_id: str,
+        *,
+        market_ticker: str,
+        action: OrderAction,
+        match_id: str,
+        client_order_id: str,
+        fallback_price_cents: int,
+    ) -> list[Fill]:
+        """Poll the exchange for a resting order's current fills (see Executor.fills_for).
+        Failure/None → empty (retry next sweep); never let a read error look like 'no fills'."""
+        fills = await self._fills_from_exchange(
+            exchange_order_id,
+            market_ticker=market_ticker,
+            action=action,
+            match_id=match_id,
+            client_order_id=client_order_id,
+            fallback_price_cents=fallback_price_cents,
+        )
+        return fills or []
 
-        Returns None on any failure so the caller falls back to the estimate. A SELL of
-        Yes was placed as a BUY of No, so we translate the No fill price back to Yes
-        terms (yes_price = 100 - no_price) to keep the portfolio in one currency.
+    async def _fills_from_exchange(
+        self,
+        exch_id: str,
+        *,
+        market_ticker: str,
+        action: OrderAction,
+        match_id: str,
+        client_order_id: str,
+        fallback_price_cents: int,
+    ) -> list[Fill] | None:
+        """Read actual fills for an order and convert to Yes-terms Fill objects.
+
+        Returns None on any failure so a placement caller falls back to the estimate (the
+        resting re-read treats None as 'nothing new this pass'). A SELL of Yes was placed as
+        a BUY of No, so we translate the No fill price back to Yes terms (yes_price =
+        100 - no_price) to keep the portfolio in one currency.
         """
         try:
-            resp = await self.client.get_fills(order_id=exch_id, ticker=order.market_ticker)
+            resp = await self.client.get_fills(order_id=exch_id, ticker=market_ticker)
         except Exception as exc:
             log.warning("fill reconciliation failed; using estimate", extra={"err": str(exc)})
             return None
-        raw = resp.get("fills", resp.get("fills", [])) or []
+        raw = resp.get("fills", []) or []
         out: list[Fill] = []
         for f in raw:
             count = int(f.get("count") or f.get("filled_count") or 0)
             if count <= 0:
                 continue
-            if order.action is OrderAction.BUY:
+            if action is OrderAction.BUY:
                 price = f.get("yes_price")
-                price = int(price) if price is not None else order.limit_price_cents
+                price = int(price) if price is not None else fallback_price_cents
             else:
                 no_price = f.get("no_price")
-                price = 100 - int(no_price) if no_price is not None else order.limit_price_cents
+                price = 100 - int(no_price) if no_price is not None else fallback_price_cents
             is_taker = bool(f.get("is_taker", True))
             fee = kalshi_fee(
                 count,
@@ -171,10 +210,10 @@ class KalshiExecutor(Executor):
             )
             out.append(
                 Fill(
-                    client_order_id=order.client_order_id,
-                    match_id=order.match_id,
-                    market_ticker=order.market_ticker,
-                    action=order.action,
+                    client_order_id=client_order_id,
+                    match_id=match_id,
+                    market_ticker=market_ticker,
+                    action=action,
                     contracts=count,
                     price_cents=int(price),
                     fee=fee,

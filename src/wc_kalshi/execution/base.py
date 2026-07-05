@@ -101,5 +101,25 @@ class Executor(ABC):
         """
         return True
 
+    async def fills_for(
+        self,
+        exchange_order_id: str,
+        *,
+        market_ticker: str,
+        action: OrderAction,
+        match_id: str,
+        client_order_id: str,
+        fallback_price_cents: int,
+    ) -> list[Fill]:
+        """All fills currently known for a resting order, in YES terms.
+
+        Used to book LATE fills — a resting limit order that fills seconds after placement
+        (past the one-shot reconcile in ``_place``) would otherwise never enter the ledger.
+        Default: none (paper/IOC orders never rest); live executors override to poll the
+        exchange. Returns the full fill set for the order; the caller books only the
+        increment beyond what it has already booked.
+        """
+        return []
+
     async def aclose(self) -> None:  # pragma: no cover - default
         return None
