@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { runBundle } from "../../lib/sim/engine";
 import { OUT_HEX } from "../../lib/format";
 import type { Bundle } from "../../lib/sim/types";
-import { cls, money, signed } from "../bits";
+import { cls, money, signed, StageBadge } from "../bits";
 
 export function Games({
   bundles, adv, onPick,
@@ -29,6 +29,7 @@ export function Games({
           const s = stats[b.match_id];
           return (
             <div key={b.match_id} className="gamecard" onClick={() => onPick(b.match_id)}>
+              {b.round && <div style={{ marginBottom: 8 }}><StageBadge round={b.round} knockout={b.is_knockout} /></div>}
               <div className="gteams"><span>{b.home_team}</span><span style={{ color: "var(--faint)" }}>v</span><span>{b.away_team}</span></div>
               <div className="gscore mono">{b.final_score[0]}–{b.final_score[1]}</div>
               <div className="gmeta">

@@ -6,7 +6,7 @@ import { devigProportional } from "../lib/sim/policy";
 import type { Bundle, Filters, OutcomeKey } from "../lib/sim/types";
 import { FINAL_LABEL, goalMinutes, outcomeWon } from "../lib/sim/util";
 import { actionVerb, outcomeName } from "../lib/format";
-import { cls, DualBars, EquityChart, money, signed, Tile } from "./bits";
+import { cls, DualBars, EquityChart, money, signed, StageBadge, Tile } from "./bits";
 
 const SPEEDS = [1, 4, 16, 64];
 
@@ -93,7 +93,10 @@ export function Terminal({
   return (
     <div className="panel">
       <div className="matchup">
-        <div className="teams">{bundle.home_team} <span style={{ color: "var(--faint)" }}>vs</span> {bundle.away_team}</div>
+        <div className="teams">
+          {bundle.home_team} <span style={{ color: "var(--faint)" }}>vs</span> {bundle.away_team}
+          {bundle.round && <span style={{ marginLeft: 8 }}><StageBadge round={bundle.round} knockout={bundle.is_knockout} /></span>}
+        </div>
         <div className="clock">
           <div className="score mono">{tick.score[0]}–{tick.score[1]}</div>
           <div className="min">{live && <span className="livedot" />}{tick.minute}′ · {tick.period}</div>

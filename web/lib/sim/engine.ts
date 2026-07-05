@@ -190,19 +190,28 @@ function unrealized(open: OpenPos[], lastMid: Partial<Record<OutcomeKey, number>
 export function runMany(
   bundles: Bundle[],
   opts: SimOptions = {}
-): { pnl: number; clvPreoff: number | null; clvN: number; nFills: number; perMatch: SimResult[] } {
+): { pnl: number; clvPreoff: number | null; clvN: number; nFills: number; wins: number; losses: number; perMatch: SimResult[] } {
   const perMatch = bundles.map((b) => runBundle(b, opts));
   let pnl = 0;
   let clvSum = 0;
   let clvN = 0;
   let nFills = 0;
+  let wins = 0;
+  let losses = 0;
   for (const r of perMatch) {
     pnl += r.pnl;
     nFills += r.fills.length;
+    // A settled taken bet resolves won=true/false; live (unsettled) bets stay null.
+    for (const d of r.decisions) {
+      if (d.category === "taken" && d.won != null) {
+        if (d.won) wins++;
+        else losses++;
+      }
+    }
     if (r.clvPreoff != null) {
       clvSum += r.clvPreoff * r.clvN;
       clvN += r.clvN;
     }
   }
-  return { pnl, clvPreoff: clvN ? clvSum / clvN : null, clvN, nFills, perMatch };
+  return { pnl, clvPreoff: clvN ? clvSum / clvN : null, clvN, nFills, wins, losses, perMatch };
 }
