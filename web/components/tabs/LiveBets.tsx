@@ -5,7 +5,7 @@
 // contract — model price vs market + the engine's would-bet flag — even the ones
 // the model can't price (half-markets, corners) which are shown market-only.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { runBundle } from "../../lib/sim/engine";
 import { evaluateTick } from "../../lib/sim/policy";
 import { evalContract } from "../../lib/sim/markets";
@@ -94,46 +94,48 @@ function contractToLine(c: LiveContract, cfg: Bundle["config"]): Line {
 function LiveGame({ bundle, bankroll, kellyFraction, filters }: {
   bundle: Bundle; bankroll: number; kellyFraction: number; filters: Filters;
 }) {
-  const r = runBundle(bundle, { bankroll, kellyFraction, filters });
-  const open = r.decisions.filter((d) => d.category === "taken");
-  const last = bundle.ticks[bundle.ticks.length - 1];
-  // Last KNOWN two-sided mid per outcome (carried forward, like the engine) — late in
-  // a lopsided game the book often goes one-sided, so the final tick may have no mid.
-  const lastMid: Partial<Record<OutcomeKey, number>> = {};
-  for (const t of bundle.ticks) {
-    for (const o of OUTS) {
-      const q = t.markets[o];
-      if (q && q[0] != null && q[1] != null) lastMid[o] = (q[0] + q[1]) / 200;
+  // The full sim + the two O(n) tick scans only change with these four inputs, so memoize
+  // them — a re-render (e.g. another live game refreshing) otherwise re-runs the whole sim.
+  const { r, open, midOf, oneX2, priceable, marketOnly } = useMemo(() => {
+    const r = runBundle(bundle, { bankroll, kellyFraction, filters });
+    const open = r.decisions.filter((d) => d.category === "taken");
+    // Last KNOWN two-sided mid per outcome (carried forward, like the engine) — late in
+    // a lopsided game the book often goes one-sided, so the final tick may have no mid.
+    const lastMid: Partial<Record<OutcomeKey, number>> = {};
+    for (const t of bundle.ticks) {
+      for (const o of OUTS) {
+        const q = t.markets[o];
+        if (q && q[0] != null && q[1] != null) lastMid[o] = (q[0] + q[1]) / 200;
+      }
     }
-  }
-  const midOf = (o: OutcomeKey) => lastMid[o] ?? null;
+    const midOf = (o: OutcomeKey) => lastMid[o] ?? null;
 
-  // 1X2 group from the latest tick that actually carries a quote (the very last tick
-  // can be one-sided in a lopsided game); proper 3-way de-vig via evaluateTick.
-  const lastQuoted = [...bundle.ticks].reverse().find((t) =>
-    OUTS.some((o) => { const q = t.markets[o]; return q && q[0] != null && q[1] != null; })
-  );
-  const sigs = lastQuoted ? evaluateTick(lastQuoted, bundle.config) : [];
-  // The engine takes only the single strongest actionable leg per tick
-  // (one_trade_per_match_tick), so exactly one 1X2 line can be "taken" — not every
-  // actionable one. The rest, if actionable, merely "meet the bar".
-  const strongest = sigs
-    .filter((s) => s.actionable)
-    .reduce<(typeof sigs)[number] | null>((best, s) => (best == null || s.netEdge > best.netEdge ? s : best), null);
-  const oneX2: Line[] = OUTS.filter((o) => sigs.some((s) => s.outcome === o)).map((o) => {
-    const s = sigs.find((x) => x.outcome === o)!;
-    const taken = strongest != null && strongest.outcome === o;
-    return {
-      label: outcomeName(bundle, o), color: OUT_HEX[o],
-      modelP: s.modelP, mid: s.implied, edge: s.modelP - s.implied,
-      action: s.rawEdge > 0 ? "buy" : s.rawEdge < 0 ? "sell" : null,
-      meetsBar: s.actionable && !taken, taken,
-    };
-  });
+    // 1X2 group from the latest tick that actually carries a quote (the very last tick
+    // can be one-sided in a lopsided game); proper 3-way de-vig via evaluateTick.
+    const lastQuoted = [...bundle.ticks].reverse().find((t) =>
+      OUTS.some((o) => { const q = t.markets[o]; return q && q[0] != null && q[1] != null; })
+    );
+    const sigs = lastQuoted ? evaluateTick(lastQuoted, bundle.config) : [];
+    // The engine takes only the single strongest actionable leg per tick
+    // (one_trade_per_match_tick), so exactly one 1X2 line can be "taken" — not every
+    // actionable one. The rest, if actionable, merely "meet the bar".
+    const strongest = sigs
+      .filter((s) => s.actionable)
+      .reduce<(typeof sigs)[number] | null>((best, s) => (best == null || s.netEdge > best.netEdge ? s : best), null);
+    const oneX2: Line[] = OUTS.filter((o) => sigs.some((s) => s.outcome === o)).map((o) => {
+      const s = sigs.find((x) => x.outcome === o)!;
+      const taken = strongest != null && strongest.outcome === o;
+      return {
+        label: outcomeName(bundle, o), color: OUT_HEX[o],
+        modelP: s.modelP, mid: s.implied, edge: s.modelP - s.implied,
+        action: s.rawEdge > 0 ? "buy" : s.rawEdge < 0 ? "sell" : null,
+        meetsBar: s.actionable && !taken, taken,
+      };
+    });
 
-  const groups = bundle.all_markets ?? [];
-  const priceable = groups.filter((g) => g.priceable);
-  const marketOnly = groups.filter((g) => !g.priceable);
+    const groups = bundle.all_markets ?? [];
+    return { r, open, midOf, oneX2, priceable: groups.filter((g) => g.priceable), marketOnly: groups.filter((g) => !g.priceable) };
+  }, [bundle, bankroll, kellyFraction, filters]);
 
   return (
     <div style={{ marginBottom: 22 }}>

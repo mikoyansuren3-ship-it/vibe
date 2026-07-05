@@ -56,6 +56,7 @@ export default function Page() {
 
   // Near-live: poll all in-progress matches (~1 min lag by design).
   const didAutoLive = useRef(false);
+  const userPicked = useRef(false); // the viewer has chosen a game — never auto-yank them after
   const lastGen = useRef(0); // newest generated_at applied — rejects out-of-order responses
   const liveFails = useRef(0);
   useEffect(() => {
@@ -88,10 +89,11 @@ export default function Page() {
     return () => { alive = false; clearInterval(h); };
   }, []);
 
-  // When live games first appear, surface the most-recent one by default (once,
-  // so we never yank the selection after the user starts navigating).
+  // When live games first appear, surface the most-recent one by default — but only if the
+  // viewer hasn't already picked a game. Without the userPicked guard, a viewer who opened a
+  // settled match BEFORE any live game appeared gets yanked away the moment one does.
   useEffect(() => {
-    if (!didAutoLive.current && liveBundles.length > 0) {
+    if (!didAutoLive.current && !userPicked.current && liveBundles.length > 0) {
       didAutoLive.current = true;
       setSelectedId(liveBundles[0].match_id);
     }
@@ -118,7 +120,11 @@ export default function Page() {
     }
   }, [replayBundles, selectedId, bundles]);
   const totalBets = useMemo(() => (bundles.length ? runMany(bundles).nFills : undefined), [bundles]);
-  const pick = (id: string, to: TabId = "replay") => { setSelectedId(id); setTab(to); };
+  // Any explicit game choice by the viewer flips userPicked, so the live auto-select won't
+  // override it later. System-driven selects (initial load, vanished-selection fallback) use
+  // setSelectedId directly and don't flip it.
+  const selectGame = (id: string) => { userPicked.current = true; setSelectedId(id); };
+  const pick = (id: string, to: TabId = "replay") => { selectGame(id); setTab(to); };
 
   const ready = manifest && bundles.length > 0;
 
@@ -137,15 +143,15 @@ export default function Page() {
               <h1>Replay</h1>
               <div className="sub">Watch the bot paper-bet a game, minute by minute.</div>
               <div className="gamenav" style={{ marginLeft: 0 }}>
-                <button className="nav" onClick={() => setSelectedId(ids[Math.max(0, posn - 1)])} disabled={posn <= 0}>‹</button>
-                <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+                <button className="nav" onClick={() => selectGame(ids[Math.max(0, posn - 1)])} disabled={posn <= 0}>‹</button>
+                <select value={selectedId} onChange={(e) => selectGame(e.target.value)}>
                   {replayBundles.map((b) => (
                     <option key={b.match_id} value={b.match_id}>
                       {b.live ? "● LIVE  " : ""}{b.home_team} {b.final_score[0]}–{b.final_score[1]} {b.away_team}
                     </option>
                   ))}
                 </select>
-                <button className="nav" onClick={() => setSelectedId(ids[Math.min(ids.length - 1, posn + 1)])} disabled={posn >= ids.length - 1}>›</button>
+                <button className="nav" onClick={() => selectGame(ids[Math.min(ids.length - 1, posn + 1)])} disabled={posn >= ids.length - 1}>›</button>
               </div>
             </div>
             <Terminal bundle={selected} bankroll={bankroll} kellyFraction={kellyFraction} filters={filters} live={isLive} adv={adv} />

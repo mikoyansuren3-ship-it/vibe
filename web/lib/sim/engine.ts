@@ -10,7 +10,7 @@
 // CLV is policy-determined and size-independent, so it reproduces the Python
 // numbers exactly; P&L is this sim's own consistent isolated-bankroll model.
 
-import { evaluateTick, type EdgeSig, kellyForTrade, signedClv, sizeContracts } from "./policy";
+import { evaluateTick, type EdgeSig, kalshiFee, kellyForTrade, signedClv, sizeContracts } from "./policy";
 import type { Bundle, Decision, DecisionCategory, Fill, Filters, OutcomeKey, SimOptions, SimResult } from "./types";
 import { NO_FILTERS } from "./types";
 
@@ -129,7 +129,11 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
     if (settled) {
       const p = f.entryCents / 100;
       const won = outcomeWon(f.outcome, bundle.outcome as string) ? 1 : 0;
-      pnl += f.action === "buy" ? f.contracts * (won - p) : f.contracts * (p - won);
+      const gross = f.action === "buy" ? f.contracts * (won - p) : f.contracts * (p - won);
+      // Net of the entry fee (charged on the executed price, like the edge calc). Zero today
+      // at fee_coefficient=0.0, but this stops the settled P&L silently overstating the day
+      // Kalshi fees return.
+      pnl += gross - kalshiFee(f.contracts, p, bundle.config.fee_coefficient);
     }
     if (f.clvPreoff != null) {
       clvSum += f.clvPreoff;
@@ -144,7 +148,8 @@ export function runBundle(bundle: Bundle, opts: SimOptions = {}): SimResult {
       const betWon = d.action === "buy" ? occurred : !occurred;
       d.won = betWon;
       const p = d.execCents / 100;
-      d.pnl = betWon ? (d.action === "buy" ? d.contracts * (1 - p) : d.contracts * p) : -d.staked;
+      const grossPnl = betWon ? (d.action === "buy" ? d.contracts * (1 - p) : d.contracts * p) : -d.staked;
+      d.pnl = grossPnl - kalshiFee(d.contracts, p, bundle.config.fee_coefficient);
     }
   } else {
     pnl = equityCurve.length ? equityCurve[equityCurve.length - 1].equity - bankroll : 0;

@@ -72,7 +72,7 @@ export function EquityChart({
 }: {
   points: number[];
   baseline: number;
-  goals: { minute: number; team: string }[];
+  goals: { minute: number; team: string; tickIndex: number }[];
   now: number;
   totalTicks: number;
 }) {
@@ -103,7 +103,7 @@ export function EquityChart({
       <polygon points={area} fill="url(#eq)" />
       <polyline points={path} fill="none" stroke={up ? "var(--green)" : "var(--red)"} strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
       {goals.map((g, i) => {
-        const gx = (g.minute / 90) * W;
+        const gx = x(g.tickIndex);  // tick-index aligned with the equity curve (not minute/90)
         return <line key={i} x1={gx} y1="0" x2={gx} y2={H} stroke="var(--yellow)" strokeWidth="0.7" strokeDasharray="2 3" opacity="0.5" />;
       })}
       <circle cx={x(points.length - 1)} cy={y(last)} r="3" fill={up ? "var(--green)" : "var(--red)"} stroke="var(--bg)" strokeWidth="1.5" />

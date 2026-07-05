@@ -1,16 +1,20 @@
 import type { Bundle, OutcomeKey } from "./types";
 
-/** Minutes at which a goal was scored (detected from score changes across ticks). */
-export function goalMinutes(b: Bundle): { minute: number; team: "home" | "away" }[] {
-  const out: { minute: number; team: "home" | "away" }[] = [];
+/** Goals scored (detected from score changes across ticks), each carrying the TICK INDEX at
+ *  which it appeared — markers are positioned by tick index to align with the tick-indexed
+ *  playhead, not by minute/90 (which drifts on a mid-join recorder and pushes ET goals off). */
+export function goalMinutes(
+  b: Bundle,
+): { minute: number; team: "home" | "away"; tickIndex: number }[] {
+  const out: { minute: number; team: "home" | "away"; tickIndex: number }[] = [];
   let ph = 0;
   let pa = 0;
-  for (const t of b.ticks) {
-    if (t.score[0] > ph) out.push({ minute: t.minute, team: "home" });
-    if (t.score[1] > pa) out.push({ minute: t.minute, team: "away" });
+  b.ticks.forEach((t, ti) => {
+    if (t.score[0] > ph) out.push({ minute: t.minute, team: "home", tickIndex: ti });
+    if (t.score[1] > pa) out.push({ minute: t.minute, team: "away", tickIndex: ti });
     ph = t.score[0];
     pa = t.score[1];
-  }
+  });
   return out;
 }
 
