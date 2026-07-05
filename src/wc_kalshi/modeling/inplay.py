@@ -18,6 +18,7 @@ to 1) is what the unit tests pin down.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
@@ -44,6 +45,21 @@ _DEFAULT_ELO = 1650.0
 _ET_MINUTES = 30.0
 _ET_INTENSITY = 0.95  # mild caution/fatigue damp vs a pro-rated 90' scoring rate
 _ET_MAX_GOALS = 8
+
+
+@dataclass(frozen=True)
+class PricedSnapshot:
+    """The shared backbone for one snapshot — remaining rates, effective Dixon-Coles rho, and
+    the joint final-score matrix — computed ONCE by ``DixonColesInplayModel.price`` so several
+    market heads (1X2, scoreline-derived, first-to-score, knockout) read the same numbers
+    instead of each rebuilding them. Heads take it via an optional ``priced=`` kwarg; passing
+    it is a pure accelerator that yields identical results, and keeps the heads coherent by
+    construction (they price off one matrix, not several independently-rebuilt ones)."""
+
+    lam: float  # remaining home-goal expectation
+    mu: float  # remaining away-goal expectation
+    rho: float  # effective DC rho for the remaining-goal matrix
+    matrix: np.ndarray  # joint final-score matrix M[i, j] = P(home_final=i, away_final=j)
 
 
 class ModelConfigLike(Protocol):
@@ -160,13 +176,20 @@ class DixonColesInplayModel(ProbabilityModel):
         lam, mu = self._apply_game_state(match, lam, mu)
         return lam, mu
 
-    def remaining_rates(self, match: MatchSnapshot) -> tuple[float, float]:
+    def remaining_rates(
+        self, match: MatchSnapshot, *, priced: "PricedSnapshot | None" = None
+    ) -> tuple[float, float]:
         """Public ``(λ_rem, μ_rem)`` — the remaining-goal expectations that build ``M`` and
         the 1X2 head (plan P0.1: expose the backbone rates for downstream heads). The SAME
         rates a bespoke head (e.g. first-to-score's competing-Poisson split) must consume to
         stay coherent with the scoreline matrix. Includes red-card + game-state multipliers;
         at a level (0-0) score the game-state factor is the identity, so a first-passage head
-        — only un-settled while 0-0 — sees the clean conditional rates."""
+        — only un-settled while 0-0 — sees the clean conditional rates.
+
+        ``priced`` (optional) supplies the already-computed backbone, so a caller pricing
+        several heads doesn't recompute the rates per head."""
+        if priced is not None:
+            return priced.lam, priced.mu
         return self._remaining_rates(match)
 
     def level_game_per_minute_rates(self, match: MatchSnapshot) -> tuple[float, float]:
@@ -219,7 +242,9 @@ class DixonColesInplayModel(ProbabilityModel):
         return self.cfg.draw_rho * rem_frac
 
     # -- prediction ------------------------------------------------------ #
-    def predict(self, match: MatchSnapshot) -> Probabilities:
+    def predict(
+        self, match: MatchSnapshot, *, priced: "PricedSnapshot | None" = None
+    ) -> Probabilities:
         # Finished: degenerate on the actual result.
         if match.period is MatchPeriod.FULL_TIME or match.status == "finished":
             d = match.score_diff
@@ -228,8 +253,12 @@ class DixonColesInplayModel(ProbabilityModel):
                 match_id=match.match_id, p_home=ph, p_draw=pd, p_away=pa, source=self.name
             )
 
-        lam, mu = self._remaining_rates(match)
-        rho_eff = self._effective_rho(match)
+        # ``priced`` (optional) reuses the shared backbone rates/rho instead of recomputing.
+        if priced is not None:
+            lam, mu, rho_eff = priced.lam, priced.mu, priced.rho
+        else:
+            lam, mu = self._remaining_rates(match)
+            rho_eff = self._effective_rho(match)
         ph, pd, pa = one_x_two(
             lam,
             mu,
@@ -252,26 +281,48 @@ class DixonColesInplayModel(ProbabilityModel):
             },
         ).normalized()
 
-    def scoreline_matrix(self, match: MatchSnapshot) -> np.ndarray:
+    def _scoreline_from_rates(
+        self, match: MatchSnapshot, lam: float, mu: float, rho: float
+    ) -> np.ndarray:
+        """Build the joint final-score matrix from already-computed remaining rates + rho:
+        convolve the remaining-goal Poissons and shift onto the current score."""
+        rem = remaining_goal_matrix(lam, mu, rho=rho, max_goals=self.cfg.max_goals)
+        hs, as_ = match.home_score, match.away_score
+        n = rem.shape[0]
+        m = np.zeros((n + hs, n + as_))
+        m[hs : hs + n, as_ : as_ + n] = rem  # shift remaining goals onto the current score
+        return m
+
+    def scoreline_matrix(
+        self, match: MatchSnapshot, *, priced: "PricedSnapshot | None" = None
+    ) -> np.ndarray:
         """Joint final-score distribution ``M[i, j] = P(home_final=i, away_final=j)``.
 
         The basis for every scoreline-derived market (total / spread / BTTS / correct-score
         / team-total / margin — see modeling/derived.py). Uses the SAME remaining-goal
         matrix ``predict`` collapses into 1X2, shifted by the current score.
+
+        ``priced`` (optional) returns the already-built matrix instead of rebuilding it.
         """
+        if priced is not None:
+            return priced.matrix
         hs, as_ = match.home_score, match.away_score
         if match.period is MatchPeriod.FULL_TIME or match.status == "finished":
             m = np.zeros((hs + 1, as_ + 1))
             m[hs, as_] = 1.0  # degenerate on the actual result
             return m
         lam, mu = self._remaining_rates(match)
-        rem = remaining_goal_matrix(
-            lam, mu, rho=self._effective_rho(match), max_goals=self.cfg.max_goals
-        )
-        n = rem.shape[0]
-        m = np.zeros((n + hs, n + as_))
-        m[hs : hs + n, as_ : as_ + n] = rem  # shift remaining goals onto the current score
-        return m
+        return self._scoreline_from_rates(match, lam, mu, self._effective_rho(match))
+
+    def price(self, match: MatchSnapshot) -> PricedSnapshot:
+        """Compute the shared backbone (remaining rates, effective rho, scoreline matrix) ONCE
+        for ``match`` so several heads can be priced without each rebuilding it. Pass the
+        result to a head's ``priced=`` kwarg — identical results, no recompute."""
+        if match.period is MatchPeriod.FULL_TIME or match.status == "finished":
+            return PricedSnapshot(0.0, 0.0, 0.0, self.scoreline_matrix(match))
+        lam, mu = self._remaining_rates(match)
+        rho = self._effective_rho(match)
+        return PricedSnapshot(lam, mu, rho, self._scoreline_from_rates(match, lam, mu, rho))
 
     def scoreline_matrix_et(self, match: MatchSnapshot) -> np.ndarray:
         """Extra-time (30') joint score matrix ``M_ET[i,j] = P(home scores i, away j in ET)``,

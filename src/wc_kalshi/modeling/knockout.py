@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 from ..models.schemas import MatchSnapshot
-from .inplay import DixonColesInplayModel
+from .inplay import DixonColesInplayModel, PricedSnapshot
 
 # P(home wins the shootout | level after extra time). Coin flip by default.
 PENS_HOME_WIN = 0.5
@@ -49,14 +49,17 @@ def pens_home_win(match: MatchSnapshot) -> float:
     return PENS_HOME_WIN
 
 
-def knockout_breakdown(model: DixonColesInplayModel, match: MatchSnapshot) -> dict[str, Any]:
+def knockout_breakdown(
+    model: DixonColesInplayModel, match: MatchSnapshot, *, priced: PricedSnapshot | None = None
+) -> dict[str, Any]:
     """Full knockout decomposition from the regulation + extra-time matrices.
 
     Returns ``advance`` (per team, sums to 1), the per-team method-of-victory split
     (win in regulation / extra time / penalties — which sum to ``advance``), ``go_to_extra_time``
     / ``go_to_penalties``, and the top-N extra-time scorelines. Conditional only on the
-    current match state."""
-    m_reg = model.scoreline_matrix(match)
+    current match state. ``priced`` (optional) supplies the shared regulation matrix; the
+    extra-time matrix is knockout-specific and always built here."""
+    m_reg = model.scoreline_matrix(match, priced=priced)
     ph_reg, p_tie_reg, pa_reg = _win_probs(m_reg)
 
     m_et = model.scoreline_matrix_et(match)
