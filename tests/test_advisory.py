@@ -210,3 +210,34 @@ def test_dashboard_proposal_endpoints(cfg, tmp_db):
     assert rejected["ok"] is True
     # now it's gone from pending
     assert all(p["id"] != pid for p in client.get("/api/proposals").json()["pending"])
+
+
+async def test_expire_proposals_prunes_old_decided(cfg, tmp_db):
+    """Decided proposals must not accumulate for the whole run — expire_proposals prunes the
+    oldest beyond the cap, but never touches pending ones (they still need a decision)."""
+    rt = _runtime(cfg, tmp_db)
+    template = await _seed_proposal(rt)
+    rt.proposals.clear()
+
+    pending_ids = []
+    for i in range(5):
+        p = template.model_copy(
+            update={"id": f"pend-{i}", "status": ProposalStatus.PENDING, "expires_ts": None}
+        )
+        rt.proposals[p.id] = p
+        pending_ids.append(p.id)
+    for i in range(80):
+        p = template.model_copy(
+            update={"id": f"done-{i}", "status": ProposalStatus.REJECTED,
+                    "ts": template.ts + timedelta(seconds=i)}
+        )
+        rt.proposals[p.id] = p
+
+    trading.expire_proposals(rt)
+
+    decided = [p for p in rt.proposals.values() if not p.is_pending]
+    assert len(decided) == trading._MAX_DECIDED_PROPOSALS  # pruned to the cap
+    assert all(pid in rt.proposals for pid in pending_ids)  # pending never pruned
+    assert "done-79" in rt.proposals  # newest decided kept
+    assert "done-0" not in rt.proposals  # oldest decided pruned
+    await rt.aclose()

@@ -159,7 +159,11 @@ def create_app(rt: "Runtime", orchestrator: "Orchestrator | None" = None) -> Fas
 
     @app.get("/api/matches/{match_id}/history")
     async def match_history(match_id: str) -> JSONResponse:
-        return JSONResponse(_json_safe(_match_history(rt, match_id)))
+        # DB-heavy: loads + pydantic-validates every persisted row for the match. Run it in a
+        # worker thread so a dashboard poll can't block the trading event loop (SQLite is
+        # opened with check_same_thread=False + WAL, so a read on another thread is safe).
+        data = await asyncio.to_thread(_match_history, rt, match_id)
+        return JSONResponse(_json_safe(data))
 
     @app.get("/api/stream")
     async def stream() -> StreamingResponse:

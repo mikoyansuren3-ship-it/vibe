@@ -33,3 +33,14 @@ def test_kill_switch_endpoint_halts(cfg, tmp_db):
     assert resp["kill_switch"] is True
     assert not rt.risk.trading_allowed
     assert client.get("/api/state").json()["risk"]["kill_switch"] is True
+
+
+def test_match_history_endpoint_runs_off_thread(cfg, tmp_db):
+    """The DB-heavy per-match history handler is dispatched via asyncio.to_thread; it must
+    still serve a well-formed (empty) series with no persisted rows and never block."""
+    client, _ = _client(cfg, tmp_db)
+    resp = client.get("/api/matches/nope/history")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["match_id"] == "nope"
+    assert body["series"] == []

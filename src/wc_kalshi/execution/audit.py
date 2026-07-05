@@ -26,38 +26,52 @@ class AuditLogger:
         self.enabled = enabled  # backtests disable this for speed
 
     def log(self, kind: str, message: str, *, match_id: str | None = None, **data: Any) -> None:
-        if not self.enabled:
+        self._emit([(kind, message, match_id, data)])
+
+    def _emit(self, entries: list[tuple[str, str, str | None, dict[str, Any]]]) -> None:
+        """Write a batch of audit entries: one file append + one decisions transaction."""
+        if not self.enabled or not entries:
             return
-        record = {
-            "ts": utcnow().isoformat(),
-            "kind": kind,
-            "match_id": match_id,
-            "message": message,
-            **data,
-        }
+        records = [
+            {"ts": utcnow().isoformat(), "kind": k, "match_id": mid, "message": msg, **d}
+            for k, msg, mid, d in entries
+        ]
         with self.path.open("a") as fh:
-            fh.write(json.dumps(record, default=str, separators=(",", ":")) + "\n")
+            fh.write("".join(json.dumps(r, default=str, separators=(",", ":")) + "\n" for r in records))
         if self.db is not None:
             try:
-                self.db.record_decision(kind, message, match_id=match_id, data=data)
+                self.db.record_decisions([
+                    {"kind": k, "message": msg, "match_id": mid, "data": d}
+                    for k, msg, mid, d in entries
+                ])
             except Exception as exc:  # never let auditing break the loop
                 log.warning("audit db write failed", extra={"err": str(exc)})
 
     # Convenience wrappers -------------------------------------------------
-    def signal(self, edge: Any) -> None:
-        self.log(
+    @staticmethod
+    def _signal_entry(edge: Any) -> tuple[str, str, str | None, dict[str, Any]]:
+        return (
             "signal",
             f"{edge.outcome.value} raw_edge={edge.raw_edge:+.3f} net={edge.net_edge:+.3f} "
             f"actionable={edge.actionable}",
-            match_id=edge.match_id,
-            outcome=edge.outcome.value,
-            market_ticker=edge.market_ticker,
-            model_prob=edge.model_prob,
-            market_prob=edge.market_prob,
-            raw_edge=edge.raw_edge,
-            net_edge=edge.net_edge,
-            actionable=edge.actionable,
+            edge.match_id,
+            {
+                "outcome": edge.outcome.value,
+                "market_ticker": edge.market_ticker,
+                "model_prob": edge.model_prob,
+                "market_prob": edge.market_prob,
+                "raw_edge": edge.raw_edge,
+                "net_edge": edge.net_edge,
+                "actionable": edge.actionable,
+            },
         )
+
+    def signal(self, edge: Any) -> None:
+        self._emit([self._signal_entry(edge)])
+
+    def signals(self, edges: list[Any]) -> None:
+        """A tick's edge signals in one file append + one decisions transaction."""
+        self._emit([self._signal_entry(e) for e in edges])
 
     def order(self, order: Any, result: Any) -> None:
         self.log(

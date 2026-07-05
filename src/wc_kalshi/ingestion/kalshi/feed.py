@@ -10,6 +10,7 @@ Orderbook/market parsing is isolated in pure functions for offline testing.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
@@ -207,19 +208,52 @@ class LiveKalshiMarketFeed(MarketFeed):
         mapping = await self._map_for(match)
         if mapping is None:
             return []
+        outcomes = mapping.outcomes()
+        if not outcomes:
+            return []
+        # One /markets call for the whole event replaces the three per-ticker /markets
+        # GETs; the orderbooks are then fetched concurrently. Six serial requests become
+        # one + a gathered burst (~2 RTTs), so the AWAY leg is no longer 5 RTTs staler
+        # than HOME on the decision path.
+        try:
+            resp = await self.client.get_markets(event_ticker=mapping.event_ticker)
+        except Exception as exc:
+            log.warning(
+                "event markets fetch failed",
+                extra={"event": mapping.event_ticker, "err": str(exc)},
+            )
+            return []
+        by_ticker = {str(m.get("ticker", "")): m for m in resp.get("markets", [])}
+        tickers = [ticker for _, ticker in outcomes]
+        if self.fetch_depth:
+            books = await asyncio.gather(*(self._orderbook(t) for t in tickers))
+        else:
+            books = [None] * len(tickers)
+        book_by_ticker = dict(zip(tickers, books))
         snapshots: list[MarketSnapshot] = []
-        for outcome, ticker in mapping.outcomes():
-            try:
-                market_obj = (await self.client.get_market(ticker)).get("market", {})
-                ob = None
-                if self.fetch_depth:
-                    ob = await self.client.get_orderbook(ticker)
-                snapshots.append(
-                    market_snapshot_from_api(match.match_id, outcome, market_obj, ob)
+        for outcome, ticker in outcomes:
+            market_obj = by_ticker.get(ticker)
+            if market_obj is None:
+                # Mapped ticker not returned by the event query (rare: the leg settled or
+                # was withdrawn between resolve and now). Skip it rather than synthesize a
+                # blank market that would look like a real quote downstream.
+                log.warning("mapped ticker absent from event markets", extra={"ticker": ticker})
+                continue
+            snapshots.append(
+                market_snapshot_from_api(
+                    match.match_id, outcome, market_obj, book_by_ticker.get(ticker)
                 )
-            except Exception as exc:
-                log.warning("market fetch failed", extra={"ticker": ticker, "err": str(exc)})
+            )
         return snapshots
+
+    async def _orderbook(self, ticker: str) -> dict[str, Any] | None:
+        """Fetch one ticker's orderbook, degrading to ``None`` on error so a single failed
+        book never drops the other legs (the market object still carries a usable quote)."""
+        try:
+            return await self.client.get_orderbook(ticker)
+        except Exception as exc:
+            log.warning("orderbook fetch failed", extra={"ticker": ticker, "err": str(exc)})
+            return None
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -236,6 +270,7 @@ def build_market_feed(cfg: "AppConfig") -> MarketFeed:
             model=build_model(cfg) if cfg.football.sim_market_xg_awareness > 0 else None,
         )
 
+    from ..budget import RequestBudget
     from .auth import KalshiSigner
     from .client import KalshiClient
 
@@ -252,5 +287,8 @@ def build_market_feed(cfg: "AppConfig") -> MarketFeed:
         signer=signer,
         timeout=cfg.kalshi.request_timeout_seconds,
         max_retries=cfg.kalshi.max_retries,
+        read_limiter=RequestBudget.per_second(
+            cfg.kalshi.requests_per_second, burst=cfg.kalshi.request_burst
+        ),
     )
     return LiveKalshiMarketFeed(client, series_ticker=cfg.kalshi.worldcup_series_ticker)

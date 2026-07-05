@@ -46,6 +46,30 @@ async def test_zero_size_rejected():
     assert res.status is OrderStatus.REJECTED
 
 
+async def test_rejected_result_is_not_cached_but_success_is():
+    """A REJECTED place must stay retryable — a transient failure can't be allowed to poison
+    the coid — while a committed (accepted/filled) place stays idempotent."""
+    from wc_kalshi.execution.base import Executor, OrderResult
+
+    class _Scripted(Executor):
+        def __init__(self, statuses):
+            super().__init__()
+            self._statuses = list(statuses)
+            self.calls = 0
+
+        async def _place(self, order, market):
+            self.calls += 1
+            return OrderResult(order.client_order_id, self._statuses.pop(0))
+
+    ex = _Scripted([OrderStatus.REJECTED, OrderStatus.FILLED])
+    r1 = await ex.place(_order(coid="c1"))
+    assert r1.status is OrderStatus.REJECTED and ex.calls == 1
+    r2 = await ex.place(_order(coid="c1"))  # same coid retried — the reject was NOT cached
+    assert r2.status is OrderStatus.FILLED and ex.calls == 2
+    r3 = await ex.place(_order(coid="c1"))  # success IS cached — no third _place
+    assert r3 is r2 and ex.calls == 2
+
+
 def _deep_market():
     from wc_kalshi.models.schemas import BookLevel
 

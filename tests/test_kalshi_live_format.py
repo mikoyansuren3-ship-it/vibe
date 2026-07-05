@@ -8,6 +8,8 @@ Two real-world format issues these lock in:
     Yes-specific label, not the title.
 """
 
+import asyncio
+
 from wc_kalshi.ingestion.kalshi.feed import (
     LiveKalshiMarketFeed,
     market_snapshot_from_api,
@@ -142,8 +144,12 @@ class _FlakyClient:
             raise RuntimeError("kalshi 5xx")
         return self.payload
 
-    async def get_market(self, ticker):
-        return {"market": {"ticker": ticker, "yes_bid": 40, "yes_ask": 42}}
+    async def get_markets(self, *, event_ticker=None, **kw):
+        # Batched fetch: return every market nested under the resolved event.
+        for ev in self.payload.get("events", []):
+            if ev.get("event_ticker") == event_ticker:
+                return {"markets": ev.get("markets", [])}
+        return {"markets": []}
 
 
 async def test_map_resolve_failure_retries_after_backoff(sample_kalshi_events, match_factory):
@@ -179,3 +185,47 @@ async def test_map_success_is_cached(sample_kalshi_events, match_factory):
     assert len(await feed.snapshots_for_match(match)) == 3
     assert len(await feed.snapshots_for_match(match)) == 3
     assert client.events_calls == 2  # counter pre-set to 1 + exactly one resolve; no re-resolve
+
+
+# -- one batched /markets + concurrently-gathered orderbooks (6 serial reqs -> 1 + burst) - #
+class _CountingClient:
+    """Serves the mapped event, records how markets/orderbooks were fetched."""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.markets_calls = 0
+        self.ob_calls = 0
+        self._ob_inflight = 0
+        self.ob_max_inflight = 0
+
+    async def get_events(self, **kw):
+        return self.payload
+
+    async def get_markets(self, *, event_ticker=None, **kw):
+        self.markets_calls += 1
+        for ev in self.payload.get("events", []):
+            if ev.get("event_ticker") == event_ticker:
+                return {"markets": ev.get("markets", [])}
+        return {"markets": []}
+
+    async def get_orderbook(self, ticker, **kw):
+        self.ob_calls += 1
+        self._ob_inflight += 1
+        self.ob_max_inflight = max(self.ob_max_inflight, self._ob_inflight)
+        await asyncio.sleep(0.02)  # hold the book open so concurrent fetches overlap
+        self._ob_inflight -= 1
+        return {"orderbook": {"yes": [[40, 10]], "no": [[55, 10]]}}
+
+
+async def test_snapshots_batch_markets_and_gather_orderbooks(sample_kalshi_events, match_factory):
+    match = match_factory(match_id="m1")
+    match.home_team, match.away_team = "USA", "Wales"
+
+    client = _CountingClient(sample_kalshi_events)
+    feed = LiveKalshiMarketFeed(client, fetch_depth=True)
+    snaps = await feed.snapshots_for_match(match)
+
+    assert {s.outcome for s in snaps} == {Outcome.HOME, Outcome.DRAW, Outcome.AWAY}
+    assert client.markets_calls == 1        # ONE batched /markets, not three per-ticker GETs
+    assert client.ob_calls == 3             # one orderbook per outcome
+    assert client.ob_max_inflight >= 2      # the books were gathered, not fetched serially

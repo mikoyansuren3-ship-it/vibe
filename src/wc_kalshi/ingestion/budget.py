@@ -41,6 +41,19 @@ class RequestBudget:
         self._lock = asyncio.Lock()
         self.granted = 0  # diagnostics: total tokens granted this process
 
+    @classmethod
+    def per_second(cls, rate: float, *, burst: int | None = None) -> "RequestBudget":
+        """Build a bucket from a per-SECOND rate (an exchange's req/s tier) instead of a
+        daily quota — the same token bucket, sized for short-horizon pacing.
+
+        ``burst`` defaults to ~1 s of steady-state capacity so a small fan-out isn't
+        paced at all, while a large concurrent burst across many live matches is still
+        bounded to the tier. Used for the client-side Kalshi limiter once market reads
+        run in parallel.
+        """
+        daily = max(1, round(rate * SECONDS_PER_DAY))
+        return cls(daily, burst=burst if burst is not None else max(1, round(rate)))
+
     def _refill(self) -> None:
         now = self._time()
         elapsed = max(0.0, now - self._last)
@@ -48,17 +61,24 @@ class RequestBudget:
         self._last = now
 
     async def acquire(self, n: int = 1) -> None:
-        """Block until ``n`` tokens are available, then consume them."""
+        """Block until ``n`` tokens are available, then consume them.
+
+        The lock is held only for the refill+consume check, NOT across the sleep — a
+        waiter that must wait for a refill would otherwise hold the lock the whole time and
+        serialise every other caller (including an urgent poll) behind it. We drop the lock
+        while sleeping and re-check on wake; another caller may have taken the tokens first,
+        so the loop simply waits again.
+        """
         n = max(1, n)
-        async with self._lock:
-            while True:
+        while True:
+            async with self._lock:
                 self._refill()
                 if self._tokens >= n:
                     self._tokens -= n
                     self.granted += n
                     return
                 deficit = n - self._tokens
-                await self._sleep(deficit / self.rate)
+            await self._sleep(deficit / self.rate)
 
     def try_acquire(self, n: int = 1) -> bool:
         """Non-blocking variant: consume ``n`` tokens if available, else False."""

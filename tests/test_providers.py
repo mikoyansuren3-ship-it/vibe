@@ -1,5 +1,7 @@
 """Provider mapping (offline) + Kalshi market mapping + orderbook parsing."""
 
+import asyncio
+
 from wc_kalshi.ingestion.football.apifootball import parse_period, snapshot_from_payload
 from wc_kalshi.ingestion.football.simulated import SimulatedFootballProvider, simulate_full_match
 from wc_kalshi.ingestion.football.thestatsapi import snapshot_from_match
@@ -233,6 +235,35 @@ async def test_apifootball_no_filter_keeps_all_leagues(monkeypatch):
     monkeypatch.setattr(p, "_get", fake_get)
     snaps = await p.fetch_live()
     assert len(snaps) == 2
+    await p.aclose()
+
+
+async def test_fetch_live_overlaps_per_fixture_requests(monkeypatch):
+    """fetch_live must fan the per-fixture statistics/events fetches out concurrently, not
+    run them 1+2N serially — otherwise the last live match's quote is N RTTs staler than
+    the first. We hold each sub-request open and assert several were in flight at once."""
+    from wc_kalshi.ingestion.football.apifootball import APIFootballProvider
+
+    p = APIFootballProvider(api_key="x", fetch_context=False)  # statistics + events on
+    inflight = 0
+    max_inflight = 0
+
+    async def fake_get(endpoint, params):
+        nonlocal inflight, max_inflight
+        if endpoint == "/fixtures":
+            return _two_league_fixtures()  # two fixtures, no league filter
+        inflight += 1
+        max_inflight = max(max_inflight, inflight)
+        await asyncio.sleep(0.02)  # hold the "connection" open to expose overlap
+        inflight -= 1
+        return {"response": []}
+
+    monkeypatch.setattr(p, "_get", fake_get)
+    snaps = await p.fetch_live()
+    assert len(snaps) == 2
+    # 2 fixtures x (stats + events) = 4 sub-requests; >=3 concurrent proves BOTH the
+    # within-fixture gather and the cross-fixture fan-out (a single fixture tops out at 2).
+    assert max_inflight >= 3
     await p.aclose()
 
 

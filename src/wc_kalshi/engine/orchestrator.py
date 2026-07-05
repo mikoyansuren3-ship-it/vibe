@@ -26,7 +26,12 @@ class Orchestrator:
         self.rt = rt
         self.provider = provider
         self.processor = TickProcessor(
-            rt, trade=trade, decision_mode=rt.cfg.execution.decision_mode
+            rt,
+            trade=trade,
+            decision_mode=rt.cfg.execution.decision_mode,
+            # Live loop marks the whole book + snapshots ONCE per poll (book_epilogue below),
+            # not once per match — see TickProcessor.book_epilogue.
+            defer_book_epilogue=True,
         )
         self.states: dict[str, MatchState] = {}
         self._stop = asyncio.Event()
@@ -40,6 +45,7 @@ class Orchestrator:
         self._settled_ids: set[str] = set()
         self._settle_max_attempts = 40  # ~ minutes of retrying before giving up
         self._extra_last: dict[str, float] = {}  # match_id -> last extra-market capture (mono)
+        self._extra_tasks: set[asyncio.Task] = set()  # in-flight background captures
 
     def stop(self) -> None:
         self._stop.set()
@@ -81,21 +87,26 @@ class Orchestrator:
         rt = self.rt
         if match.status == "abandoned":  # interrupted/suspended/etc — no valid result
             return
+        snaps: list = []
         try:
             rt.db.add_match_snapshot(match)
             rt.bus.publish(Event(EventType.MATCH_SNAPSHOT, {"match_id": match.match_id, "minute": match.minute}, match.match_id))
             snaps = await rt.market_feed.snapshots_for_match(match)
-            for s in snaps:
-                rt.db.add_market_snapshot(s)
-            await self._capture_extra_markets(match, snaps)
+            rt.db.add_market_snapshots(snaps)
             st = self.states.setdefault(match.match_id, MatchState(match.match_id))
             await self.processor.process(match, snaps, st)
         except Exception as exc:  # one bad match must not kill the whole run
             log.exception("match handling failed", extra={"match_id": match.match_id, "err": str(exc)})
+        # The broader-market capture is research-only (feeds raw_market_quotes, never the
+        # decision) yet costs many serial Kalshi RTTs. Spawn it in the BACKGROUND after the
+        # trade path so it can't inject ~6 s of latency ahead of an order.
+        self._spawn_extra_capture(match, snaps)
 
-    async def _capture_extra_markets(self, match: MatchSnapshot, snaps: list) -> None:
-        """Record the broader per-match market set (Total/Spread/BTTS/1H/corners/…) into
-        raw_market_quotes. Throttled, live-feed only — for researching the roadmap markets."""
+    def _spawn_extra_capture(self, match: MatchSnapshot, snaps: list) -> None:
+        """Fire-and-forget the extra-market capture (Total/Spread/BTTS/1H/corners/…) into
+        raw_market_quotes. Throttled + gated here synchronously so we don't even create a
+        task when it isn't due; the task is tracked so it isn't GC'd and is drained on stop.
+        """
         rt = self.rt
         if not getattr(rt.cfg.kalshi, "capture_extra_markets", False):
             return
@@ -107,17 +118,27 @@ class Orchestrator:
         if "-" not in ev:
             return
         now = time.monotonic()
-        interval = rt.cfg.kalshi.extra_markets_interval_seconds
-        if now - self._extra_last.get(match.match_id, 0.0) < interval:
+        if now - self._extra_last.get(match.match_id, 0.0) < rt.cfg.kalshi.extra_markets_interval_seconds:
             return
         self._extra_last[match.match_id] = now
+        task = asyncio.create_task(
+            self._capture_extra_markets(client, match.match_id, ev.split("-", 1)[1])
+        )
+        self._extra_tasks.add(task)
+        task.add_done_callback(self._extra_tasks.discard)
+
+    async def _capture_extra_markets(self, client, match_id: str, event_suffix: str) -> None:
+        """Background body: pull the roadmap series for one fixture and persist the quotes.
+        Kept serial (not gathered) so a burst doesn't drain the shared Kalshi read limiter
+        and add jitter to the decision path — nothing waits on this, so 6 s in the
+        background is fine."""
         from ..ingestion.kalshi.extra_markets import capture_extra_markets
 
         try:
-            rows = await capture_extra_markets(client, match.match_id, ev.split("-", 1)[1])
-            rt.db.add_raw_market_quotes(rows)
+            rows = await capture_extra_markets(client, match_id, event_suffix)
+            self.rt.db.add_raw_market_quotes(rows)
         except Exception as exc:
-            log.warning("extra-market capture failed", extra={"match_id": match.match_id, "err": str(exc)})
+            log.warning("extra-market capture failed", extra={"match_id": match_id, "err": str(exc)})
 
     async def _settle_dropped(self, current_ids: set[str]) -> None:
         """Capture the settled state of matches that have left the live feed.
@@ -152,6 +173,11 @@ class Orchestrator:
                     "captured final state",
                     extra={"match_id": mid, "score": f"{snap.home_score}-{snap.away_score}"},
                 )
+                # Book any late fills on this match's resting orders before it leaves the
+                # watch set, so the settled position reflects the true exchange fills.
+                from .trading import reconcile_resting_orders
+
+                await reconcile_resting_orders(self.rt, match_id=mid)
                 await self._handle(snap)
             elif self._pending_settle[mid] >= self._settle_max_attempts:
                 log.warning("settlement gave up (never reported FT)", extra={"match_id": mid})
@@ -167,7 +193,14 @@ class Orchestrator:
                 # A transient network/API error (DNS blip, 5xx, machine waking from sleep)
                 # must NOT kill a long-running recorder — log it and retry next interval.
                 try:
-                    matches = await self.provider.fetch_live()
+                    # Bound the poll: a wedged endpoint (or a stacked-up Retry-After) must
+                    # not freeze the loop with open positions we can't react to. On timeout
+                    # we skip the tick entirely (no settle) and retry next interval — a
+                    # dropped-match false-settle from an empty live set would be worse.
+                    matches = await asyncio.wait_for(
+                        self.provider.fetch_live(),
+                        timeout=rt.cfg.football.poll_timeout_seconds,
+                    )
                     self._last_live = matches or []
                     if matches:
                         await asyncio.gather(*(self._handle(m) for m in matches))
@@ -175,6 +208,15 @@ class Orchestrator:
                     # the live feed (it finished), so replay can settle + score it.
                     await self._settle_dropped({m.match_id for m in self._last_live})
                     await self._maybe_sweep_resting()
+                    # One whole-book mark-to-market + risk/portfolio snapshot for the WHOLE
+                    # poll (positions marked, settlements booked, resting sweeps done) —
+                    # instead of the same O(positions) work repeated inside every match.
+                    self.processor.book_epilogue()
+                except asyncio.TimeoutError:
+                    log.warning(
+                        "live poll timed out; skipping tick",
+                        extra={"timeout_s": rt.cfg.football.poll_timeout_seconds},
+                    )
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive across blips
                     log.warning("poll failed; retrying next interval", extra={"err": str(exc)})
                 tick += 1
@@ -189,6 +231,12 @@ class Orchestrator:
                 except asyncio.TimeoutError:
                     pass
         finally:
+            # Cancel any in-flight background captures so they don't outlive the loop or
+            # write to a closing DB (research-only; a dropped snapshot on stop is harmless).
+            for t in self._extra_tasks:
+                t.cancel()
+            if self._extra_tasks:
+                await asyncio.gather(*self._extra_tasks, return_exceptions=True)
             if self._flatten_requested:
                 try:
                     from .trading import flatten_all

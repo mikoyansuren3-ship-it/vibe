@@ -1,15 +1,47 @@
 """Execution lifecycle: kill-switch flatten, resting-order timeout, adaptive polling."""
 
+import asyncio
 from datetime import timedelta
 
 import pytest
 
+from wc_kalshi.engine import trading
 from wc_kalshi.engine.builders import build_runtime
 from wc_kalshi.engine.orchestrator import Orchestrator
 from wc_kalshi.engine.trading import flatten_all, sweep_resting_orders
+from wc_kalshi.execution.base import Executor, Fill
 from wc_kalshi.ingestion.football.base import FootballDataProvider
 from wc_kalshi.models.schemas import MatchPeriod, OrderAction, Outcome
 from wc_kalshi.util import utcnow
+
+
+class _LateFillExecutor(Executor):
+    """Stub live-style executor: ``fills_for`` returns a controllable, growing fill set so we
+    can drive late-fill reconciliation deterministically."""
+
+    def __init__(self):
+        super().__init__()
+        self.fills: list[Fill] = []
+        self.canceled: list[str] = []
+
+    async def _place(self, order, market):  # pragma: no cover - placement not exercised here
+        raise AssertionError("placement not used in reconcile tests")
+
+    async def fills_for(self, oid, **kw):
+        return list(self.fills)
+
+    async def cancel(self, oid):
+        self.canceled.append(oid)
+        return True
+
+
+def _rest(rt, oid="EX-1", *, booked=0, stale=False):
+    rt.resting_orders[oid] = {
+        "coid": "c", "match_id": "m1", "market_ticker": "T1", "outcome": Outcome.HOME,
+        "action": OrderAction.BUY, "cost_per_contract": 0.5, "limit_price_cents": 50,
+        "booked": booked, "minute": 30,
+        "placed_ts": utcnow() - timedelta(seconds=120 if stale else 0),
+    }
 
 
 @pytest.fixture
@@ -196,6 +228,57 @@ async def test_reappearing_match_clears_pending(rt, match_factory):
     assert "m1" not in orch._pending_settle and "m1" not in orch._settled_ids
 
 
+async def test_extra_capture_runs_after_process_in_background(rt, match_factory):
+    """The research-only extra-market capture must be fire-and-forget AFTER the decision,
+    never an inline block ahead of it — otherwise it injects ~6 s of Kalshi RTTs between
+    the quote and the order."""
+    from wc_kalshi.models.schemas import MarketSnapshot
+
+    order: list[str] = []
+
+    class _Client:
+        async def get_markets(self, *, event_ticker=None, **kw):
+            order.append("capture")
+            return {"markets": []}
+
+    class _Feed:
+        client = _Client()
+
+        async def snapshots_for_match(self, match):
+            return [
+                MarketSnapshot(
+                    market_ticker="KXWCGAME-26JUN27USAWAL-USA",
+                    event_ticker="KXWCGAME-26JUN27USAWAL",
+                    match_id=match.match_id, outcome=Outcome.HOME, yes_bid=40, yes_ask=42,
+                )
+            ]
+
+        async def aclose(self):
+            pass
+
+    rt.market_feed = _Feed()
+    rt.cfg.kalshi.capture_extra_markets = True
+    rt.cfg.kalshi.extra_markets_interval_seconds = 0.0
+
+    orch = Orchestrator(rt, _StaticProvider([]), trade=False)
+
+    async def fake_process(match, snaps, st):
+        order.append("process")
+
+    orch.processor.process = fake_process  # type: ignore[assignment]
+
+    await orch._handle(match_factory(match_id="m1", minute=30, period=MatchPeriod.FIRST_HALF))
+    # Fire-and-forget: the task exists but hasn't run yet — process was NOT blocked on it.
+    assert orch._extra_tasks
+    assert order == ["process"]
+    await asyncio.gather(*orch._extra_tasks)  # drain the background capture
+    # The capture fans out over the whole roadmap series, so it hits the client many times —
+    # what matters is the decision ran first and every capture RTT landed strictly after it.
+    assert order[0] == "process"
+    assert order.count("capture") >= 1
+    assert all(step == "capture" for step in order[1:])
+
+
 async def test_kill_sets_flatten_request(rt):
     orch = Orchestrator(rt, _StaticProvider([]), trade=False)
     rt.cfg.execution.flatten_on_kill = True
@@ -221,3 +304,120 @@ async def test_marks_ignore_stale_last_price(rt, match_factory):
     await proc.process(match, snaps, MatchState("m1"))
     assert rt.last_mids.get("KX-BOOK") == 0.41  # two-sided book marks
     assert "KX-STALE" not in rt.last_mids  # stale print never becomes a mark
+
+
+async def test_defer_epilogue_moves_whole_book_mark_off_process(rt, match_factory):
+    """defer_book_epilogue must move the whole-book mark + snapshots OUT of process() (they
+    become a per-poll concern) and into book_epilogue(). Without the flag — the backtest
+    path — process() still marks inline, exactly once, as before."""
+    from wc_kalshi.engine.match_loop import MatchState, TickProcessor
+    from wc_kalshi.models.schemas import MarketSnapshot
+
+    calls = {"n": 0}
+    real_uu = rt.risk.update_unrealized
+
+    def counting_uu(v):
+        calls["n"] += 1
+        return real_uu(v)
+
+    rt.risk.update_unrealized = counting_uu  # type: ignore[method-assign]
+    snaps = [MarketSnapshot(market_ticker="KX-BOOK", match_id="m1", outcome=Outcome.HOME,
+                            yes_bid=40, yes_ask=42)]
+    match = match_factory(match_id="m1", minute=30, period=MatchPeriod.FIRST_HALF)
+
+    # Deferred (live): process() does NOT mark the whole book; book_epilogue() does.
+    proc = TickProcessor(rt, trade=False, persist=False, defer_book_epilogue=True)
+    await proc.process(match, snaps, MatchState("m1"))
+    assert calls["n"] == 0
+    proc.book_epilogue()
+    assert calls["n"] == 1
+
+    # Not deferred (backtest): process() marks inline, once, unchanged.
+    calls["n"] = 0
+    proc2 = TickProcessor(rt, trade=False, persist=False)
+    await proc2.process(match, snaps, MatchState("m1b"))
+    assert calls["n"] == 1
+
+
+async def test_orchestrator_marks_whole_book_once_per_poll(rt, match_factory):
+    """The live loop must mark the whole book + snapshot risk/portfolio ONCE per poll, not
+    once per match — that redundancy was O(matches × positions) every tick."""
+    from wc_kalshi.models.schemas import MarketSnapshot
+
+    class _Feed:
+        async def snapshots_for_match(self, match):
+            return [MarketSnapshot(market_ticker=f"KX-{match.match_id}", match_id=match.match_id,
+                                   outcome=Outcome.HOME, yes_bid=40, yes_ask=42)]
+
+        async def aclose(self):
+            pass
+
+    rt.market_feed = _Feed()
+    calls = {"uu": 0, "epi": 0}
+    real_uu = rt.risk.update_unrealized
+
+    def counting_uu(v):
+        calls["uu"] += 1
+        return real_uu(v)
+
+    rt.risk.update_unrealized = counting_uu  # type: ignore[method-assign]
+
+    matches = [match_factory(match_id=f"m{i}", minute=30, period=MatchPeriod.FIRST_HALF)
+               for i in range(3)]
+    orch = Orchestrator(rt, _StaticProvider(matches), trade=False)
+    real_epi = orch.processor.book_epilogue
+
+    def counting_epi():
+        calls["epi"] += 1
+        return real_epi()
+
+    orch.processor.book_epilogue = counting_epi  # type: ignore[method-assign]
+    await orch.run(max_ticks=1)
+
+    assert calls["epi"] == 1  # one epilogue for the whole poll, regardless of match count
+    assert calls["uu"] == 1  # ...and the whole-book mark ran once, not three times
+
+
+async def test_reconcile_books_late_fills_exactly_once(rt):
+    """A resting order that fills after placement is booked by reconcile — and only the
+    increment each pass (info['booked'] tracks the running total), so repeated reconciles
+    can't double-count."""
+    ex = _LateFillExecutor()
+    rt.executor = ex
+    _rest(rt)
+
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 0  # nothing filled yet
+    ex.fills = [Fill("c", "m1", "T1", OrderAction.BUY, 10, 50, 0.1)]
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 10  # booked once
+    assert rt.portfolio.positions["T1"].yes_contracts == 10
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 0  # idempotent
+    assert rt.portfolio.positions["T1"].yes_contracts == 10
+    ex.fills.append(Fill("c", "m1", "T1", OrderAction.BUY, 5, 51, 0.05))
+    assert await trading.reconcile_resting_orders(rt, persist=False) == 5  # only the increment
+    assert rt.portfolio.positions["T1"].yes_contracts == 15
+
+
+async def test_sweep_reconciles_late_fill_before_cancelling_stale(rt):
+    """Sweep books a fill that landed on a resting order before ageing it out — the late
+    fill must not be lost when the stale order is cancelled."""
+    ex = _LateFillExecutor()
+    rt.executor = ex
+    _rest(rt, stale=True)
+    ex.fills = [Fill("c", "m1", "T1", OrderAction.BUY, 8, 50, 0.08)]
+
+    canceled = await sweep_resting_orders(rt, timeout_seconds=60)
+    assert canceled == 1
+    assert "EX-1" in ex.canceled
+    assert "EX-1" not in rt.resting_orders  # dropped after cancel
+    assert rt.portfolio.positions["T1"].yes_contracts == 8  # late fill booked before the cancel
+
+
+async def test_paper_executor_reports_no_late_fills():
+    """Paper/IOC orders never rest, so the reconciler is a no-op there (backtests unaffected)."""
+    from wc_kalshi.execution.paper import PaperExecutor
+
+    ex = PaperExecutor()
+    assert await ex.fills_for(
+        "x", market_ticker="t", action=OrderAction.BUY, match_id="m",
+        client_order_id="c", fallback_price_cents=50,
+    ) == []

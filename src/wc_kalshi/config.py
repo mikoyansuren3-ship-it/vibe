@@ -63,6 +63,13 @@ class KalshiSection(BaseModel):
     poll_interval_seconds: float = 2.0
     request_timeout_seconds: float = 10.0
     max_retries: int = 4
+    # Client-side pacing for the Kalshi read fan-out. Once a match's market + orderbook
+    # polls run in parallel (and several matches poll at once), an unpaced burst can trip
+    # the exchange's read tier (~10 req/s basic). This token bucket keeps aggregate GET
+    # traffic under the tier; order placement (POST/DELETE) is deliberately NOT throttled,
+    # so pacing never adds latency to the trade path.
+    requests_per_second: float = 8.0
+    request_burst: int = 20
     fee_coefficient: float = 0.07
     maker_fee_fraction: float = 0.25
     # Recorder: also capture the broader per-match market set (Total/Spread/BTTS/1H/…) into
@@ -75,6 +82,10 @@ class KalshiSection(BaseModel):
 class FootballSection(BaseModel):
     provider: str = "simulated"
     poll_interval_seconds: float = 15.0
+    # Hard ceiling on a single live poll (fetch_live). Even with Retry-After clamped, a
+    # wedged/slow endpoint must not freeze the loop with positions open — we abandon the
+    # poll past this and retry next interval. Must exceed request_timeout_seconds.
+    poll_timeout_seconds: float = 30.0
     apifootball_base: str = "https://v3.football.api-sports.io"
     thestatsapi_base: str = "https://api.thestatsapi.com"
     request_timeout_seconds: float = 10.0

@@ -11,11 +11,12 @@ can never interleave a position/risk mutation.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..eventbus import Event, EventType
-from ..execution.base import OrderRequest, OrderResult, OrderStatus
+from ..execution.base import Fill, OrderRequest, OrderResult, OrderStatus
 from ..models.schemas import (
     EdgeSignal,
     MarketSnapshot,
@@ -25,11 +26,14 @@ from ..models.schemas import (
     ProposalStatus,
     TradeProposal,
 )
+from ..logging_setup import get_logger
 from ..modeling.xg_proxy import observed_xg
 from ..util import new_id, utcnow
 
 if TYPE_CHECKING:
     from .builders import Runtime
+
+log = get_logger("engine.trading")
 
 
 def _outcome_label(match: MatchSnapshot, outcome: Outcome) -> str:
@@ -209,46 +213,26 @@ async def place_and_book(
         rt.bus.publish(Event(EventType.ORDER, {"coid": coid, "status": result.status.value}, match_id))
         if result.is_filled:
             for fill in result.fills:
-                rt.portfolio.apply_fill(
-                    match_id=match_id,
-                    market_ticker=market_ticker,
-                    outcome=outcome,
-                    action=fill.action,
-                    contracts=fill.contracts,
-                    price_cents=fill.price_cents,
-                    fee=fill.fee,
-                )
-                rt.risk.register_fill(
-                    match_id=match_id,
-                    market_ticker=market_ticker,
-                    action=fill.action,
-                    contracts=fill.contracts,
-                    cost_per_contract=cost_per_contract,
-                )
-                # Record the fill for closing-line-value (CLV) analysis.
-                rt.fills_log.append(
-                    {
-                        "match_id": match_id,
-                        "market_ticker": market_ticker,
-                        "outcome": outcome.value,
-                        "action": fill.action.value,
-                        "contracts": fill.contracts,
-                        "entry_price_cents": fill.price_cents,
-                        "minute": minute,
-                    }
-                )
-                if persist:
-                    _persist_fill(rt, fill)
+                _book_fill(rt, fill, outcome=outcome, cost_per_contract=cost_per_contract,
+                           minute=minute, persist=persist)
                 n_fills += 1
             fmsg = f"{action.value} {result.filled_contracts} {market_ticker} @ {limit_price_cents}c"
             rt.state.add_decision({"kind": "fill", "match_id": match_id, "message": fmsg})
             rt.bus.publish(Event(EventType.ALERT, {"kind": "fill", "message": fmsg}, match_id))
-        # Track an unfilled/partially-filled order as resting (live order lifecycle).
+        # Track an unfilled/partially-filled order as resting (live order lifecycle). We keep
+        # the booking context + how much is already booked so a LATER fill can be reconciled
+        # (see reconcile_resting_orders) instead of silently drifting the ledger.
         if result.exchange_order_id and result.status.value in {"accepted", "partial"}:
             rt.resting_orders[result.exchange_order_id] = {
                 "coid": coid,
                 "match_id": match_id,
                 "market_ticker": market_ticker,
+                "outcome": outcome,
+                "action": action,
+                "cost_per_contract": cost_per_contract,
+                "limit_price_cents": limit_price_cents,
+                "booked": result.filled_contracts,
+                "minute": minute,
                 "placed_ts": utcnow(),
             }
     return result, n_fills
@@ -333,11 +317,23 @@ def reject_proposal(rt: "Runtime", proposal_id: str) -> bool:
     return True
 
 
+# Decided (executed/rejected/expired/failed) proposals are kept only to show a short recent
+# list on the dashboard; without a bound they accumulate for the whole run — growing the
+# per-tick expiry scan and the proposals_view dump. Keep well above what the UI surfaces.
+_MAX_DECIDED_PROPOSALS = 50
+
+
 def expire_proposals(rt: "Runtime", now=None) -> None:
     now = now or utcnow()
     for p in rt.proposals.values():
         if p.is_pending and p.expires_ts is not None and p.expires_ts < now:
             p.status = ProposalStatus.EXPIRED
+    # Prune the oldest decided proposals so rt.proposals can't grow without bound. Pending
+    # ones are always kept (they still need a decision); only decided ones beyond the cap go.
+    decided = [p for p in rt.proposals.values() if not p.is_pending]
+    if len(decided) > _MAX_DECIDED_PROPOSALS:
+        for p in sorted(decided, key=lambda p: p.ts, reverse=True)[_MAX_DECIDED_PROPOSALS:]:
+            rt.proposals.pop(p.id, None)
 
 
 def _closing_price_cents(snap: MarketSnapshot | None, action: OrderAction) -> int:
@@ -393,15 +389,22 @@ async def flatten_all(rt: "Runtime", *, reason: str = "kill switch flatten", per
 
 
 async def sweep_resting_orders(rt: "Runtime", *, timeout_seconds: float, now=None) -> int:
-    """Cancel resting (unfilled) orders older than ``timeout_seconds`` (live order
-    lifecycle: don't leave stale limit orders exposed to adverse selection)."""
+    """Reconcile then age out resting orders (live order lifecycle).
+
+    Every resting order is reconciled first, so a limit order that filled since placement is
+    booked before we do anything else — the executor's one-shot reconcile at placement would
+    otherwise miss it. Orders older than ``timeout_seconds`` are then cancelled (don't leave
+    stale limits exposed to adverse selection), with a final reconcile to catch a fill that
+    landed in the cancel race window."""
     now = now or utcnow()
     canceled = 0
     for oid, info in list(rt.resting_orders.items()):
+        await _reconcile_one(rt, oid, info)  # book any fills that landed while resting
         age = (now - info["placed_ts"]).total_seconds()
         if age < timeout_seconds:
             continue
         ok = await rt.executor.cancel(oid)
+        await _reconcile_one(rt, oid, info)  # catch a fill racing the cancel, before we drop it
         rt.resting_orders.pop(oid, None)
         if ok:
             canceled += 1
@@ -426,44 +429,142 @@ def proposals_view(rt: "Runtime") -> dict[str, Any]:
     }
 
 
+def _book_fill(rt: "Runtime", fill: Fill, *, outcome, cost_per_contract: float,
+               minute: int | None, persist: bool) -> None:
+    """Book one fill into the portfolio + risk ledger and the CLV log. Shared by the
+    placement path and the resting-order reconciler so a late fill is booked identically to
+    an immediate one. ``price_cents`` on the Fill is always YES-terms."""
+    rt.portfolio.apply_fill(
+        match_id=fill.match_id, market_ticker=fill.market_ticker, outcome=outcome,
+        action=fill.action, contracts=fill.contracts, price_cents=fill.price_cents, fee=fill.fee,
+    )
+    rt.risk.register_fill(
+        match_id=fill.match_id, market_ticker=fill.market_ticker, action=fill.action,
+        contracts=fill.contracts, cost_per_contract=cost_per_contract,
+    )
+    rt.fills_log.append(
+        {
+            "match_id": fill.match_id,
+            "market_ticker": fill.market_ticker,
+            "outcome": outcome.value,
+            "action": fill.action.value,
+            "contracts": fill.contracts,
+            "entry_price_cents": fill.price_cents,
+            "minute": minute,
+        }
+    )
+    if persist:
+        _persist_fill(rt, fill)
+
+
+def _incremental_fills(fills: list[Fill], already_booked: int) -> list[Fill]:
+    """The portion of ``fills`` beyond the first ``already_booked`` contracts — what a
+    resting order has filled SINCE we last booked it. Fills are oldest-first; a fill that
+    straddles the boundary is split (fee prorated) so we never re-book contracts twice."""
+    out: list[Fill] = []
+    skip = already_booked
+    for f in fills:
+        if skip >= f.contracts:
+            skip -= f.contracts
+            continue
+        take = f.contracts - skip
+        skip = 0
+        out.append(f if take == f.contracts else replace(f, contracts=take, fee=f.fee * take / f.contracts))
+    return out
+
+
+async def _reconcile_one(rt: "Runtime", oid: str, info: dict, *, persist: bool = True) -> int:
+    """Book any fills that landed on one resting order since we last checked. Idempotent —
+    ``info['booked']`` tracks the running total, so repeated calls only book the increment.
+    Returns the number of newly-booked contracts."""
+    # A resting entry without booking context (a legacy/hand-built dict) can't be reconciled;
+    # skip it rather than raise and abort the sweep over every other order.
+    if not {"action", "outcome", "cost_per_contract", "limit_price_cents"} <= info.keys():
+        return 0
+    fills = await rt.executor.fills_for(
+        oid,
+        market_ticker=info["market_ticker"],
+        action=info["action"],
+        match_id=info["match_id"],
+        client_order_id=info["coid"],
+        fallback_price_cents=info["limit_price_cents"],
+    )
+    total = sum(f.contracts for f in fills)
+    already = info.get("booked", 0)
+    if total <= already:
+        return 0
+    booked = 0
+    for fill in _incremental_fills(fills, already):
+        _book_fill(rt, fill, outcome=info["outcome"],
+                   cost_per_contract=info["cost_per_contract"], minute=info.get("minute"),
+                   persist=persist)
+        booked += fill.contracts
+    info["booked"] = total
+    return booked
+
+
+async def reconcile_resting_orders(rt: "Runtime", *, match_id: str | None = None,
+                                   persist: bool = True) -> int:
+    """Book late fills across resting orders (optionally just one match's). The executor only
+    reconciles once, at placement; without this a limit order that fills seconds later would
+    drift the ledger from the exchange (paper/IOC never rests, so this is a live/demo no-op).
+    Returns total newly-booked contracts."""
+    booked = 0
+    for oid, info in list(rt.resting_orders.items()):
+        if match_id is not None and info.get("match_id") != match_id:
+            continue
+        booked += await _reconcile_one(rt, oid, info, persist=persist)
+    return booked
+
+
 # --- persistence helpers (moved here so both paths share them) ------------- #
+# The order/fill are already placed on the exchange and booked into the in-memory ledger by
+# the time we persist. A DB error here (e.g. a unique-coid IntegrityError, or a transient
+# write failure) must NOT propagate and abort the rest of the tick — the live ledger is
+# authoritative for the session; we log and carry on rather than lose the booked state.
 def _persist_order(rt: "Runtime", order, result) -> None:
     from ..models.db import OrderRow
 
-    with rt.db.session() as s:
-        s.add(
-            OrderRow(
-                client_order_id=order.client_order_id,
-                exchange_order_id=result.exchange_order_id,
-                match_id=order.match_id,
-                market_ticker=order.market_ticker,
-                ts=utcnow(),
-                action=order.action.value,
-                side=order.side.value,
-                count=order.contracts,
-                price_cents=order.limit_price_cents,
-                status=result.status.value,
-                mode=rt.executor.mode,
-                data={"reason": result.message, "filled": result.filled_contracts},
+    try:
+        with rt.db.session() as s:
+            s.add(
+                OrderRow(
+                    client_order_id=order.client_order_id,
+                    exchange_order_id=result.exchange_order_id,
+                    match_id=order.match_id,
+                    market_ticker=order.market_ticker,
+                    ts=utcnow(),
+                    action=order.action.value,
+                    side=order.side.value,
+                    count=order.contracts,
+                    price_cents=order.limit_price_cents,
+                    status=result.status.value,
+                    mode=rt.executor.mode,
+                    data={"reason": result.message, "filled": result.filled_contracts},
+                )
             )
-        )
+    except Exception as exc:  # noqa: BLE001 - persistence must not unwind a booked tick
+        log.warning("order persist failed", extra={"coid": order.client_order_id, "err": str(exc)})
 
 
 def _persist_fill(rt: "Runtime", fill) -> None:
     from ..models.db import FillRow
 
-    with rt.db.session() as s:
-        s.add(
-            FillRow(
-                client_order_id=fill.client_order_id,
-                match_id=fill.match_id,
-                market_ticker=fill.market_ticker,
-                ts=utcnow(),
-                action=fill.action.value,
-                side="yes",
-                count=fill.contracts,
-                price_cents=fill.price_cents,
-                fee=fill.fee,
-                data={},
+    try:
+        with rt.db.session() as s:
+            s.add(
+                FillRow(
+                    client_order_id=fill.client_order_id,
+                    match_id=fill.match_id,
+                    market_ticker=fill.market_ticker,
+                    ts=utcnow(),
+                    action=fill.action.value,
+                    side="yes",
+                    count=fill.contracts,
+                    price_cents=fill.price_cents,
+                    fee=fill.fee,
+                    data={},
+                )
             )
-        )
+    except Exception as exc:  # noqa: BLE001 - persistence must not unwind a booked tick
+        log.warning("fill persist failed", extra={"coid": fill.client_order_id, "err": str(exc)})

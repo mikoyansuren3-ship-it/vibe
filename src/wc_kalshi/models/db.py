@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine, select
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, create_engine, event, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from ..util import utcnow
@@ -143,6 +143,26 @@ class DecisionRow(Base):
     data: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+def _enable_sqlite_wal(engine: Any) -> None:
+    """Put SQLite in WAL + ``synchronous=NORMAL`` on every connection.
+
+    Default ``journal_mode=delete`` + ``synchronous=FULL`` fsyncs on every commit, and
+    the recorder does ~8-12 single-row commits per match-tick *inside the async event
+    loop* — so each fsync stalls the loop that's also polling markets and placing orders.
+    WAL lets readers (the 60s live publisher / dashboard) run without blocking the writer,
+    and NORMAL drops the per-commit fsync to one per checkpoint (WAL keeps this crash-safe
+    for anything but an OS/power failure — acceptable for append-only research capture).
+    No-op for ``:memory:`` (journal stays ``memory``) and never reached for Postgres.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _set_pragmas(dbapi_conn: Any, _record: Any) -> None:  # pragma: no cover - trivial
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
+
+
 class Database:
     """Thin wrapper around the engine + session factory with typed inserts."""
 
@@ -154,6 +174,8 @@ class Database:
             Path(db_url[len("sqlite:///"):]).parent.mkdir(parents=True, exist_ok=True)
         connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
         self.engine = create_engine(db_url, echo=echo, future=True, connect_args=connect_args)
+        if db_url.startswith("sqlite"):
+            _enable_sqlite_wal(self.engine)
         self._sessionmaker = sessionmaker(self.engine, expire_on_commit=False, future=True)
         Base.metadata.create_all(self.engine)
 
@@ -185,21 +207,31 @@ class Database:
                 )
             )
 
+    @staticmethod
+    def _market_row(snap: MarketSnapshot) -> "MarketSnapshotRow":
+        return MarketSnapshotRow(
+            match_id=snap.match_id,
+            market_ticker=snap.market_ticker,
+            ts=snap.ts,
+            outcome=snap.outcome.value,
+            yes_bid=snap.yes_bid,
+            yes_ask=snap.yes_ask,
+            last_price=snap.last_price,
+            status=snap.status,
+            data=snap.model_dump(mode="json"),
+        )
+
     def add_market_snapshot(self, snap: MarketSnapshot) -> None:
         with self.session() as s:
-            s.add(
-                MarketSnapshotRow(
-                    match_id=snap.match_id,
-                    market_ticker=snap.market_ticker,
-                    ts=snap.ts,
-                    outcome=snap.outcome.value,
-                    yes_bid=snap.yes_bid,
-                    yes_ask=snap.yes_ask,
-                    last_price=snap.last_price,
-                    status=snap.status,
-                    data=snap.model_dump(mode="json"),
-                )
-            )
+            s.add(self._market_row(snap))
+
+    def add_market_snapshots(self, snaps: list[MarketSnapshot]) -> None:
+        """One transaction for a tick's whole market book (3 outcomes) instead of one
+        fsync-costing commit per outcome — see WAL note on ``_enable_sqlite_wal``."""
+        if not snaps:
+            return
+        with self.session() as s:
+            s.add_all([self._market_row(x) for x in snaps])
 
     def add_raw_market_quotes(self, rows: list[dict[str, Any]]) -> None:
         """Batch-insert generic market quotes (see RawMarketQuoteRow / extra_markets.py)."""
@@ -222,22 +254,31 @@ class Database:
                 )
             )
 
+    @staticmethod
+    def _edge_row(edge: EdgeSignal) -> "EdgeRow":
+        return EdgeRow(
+            match_id=edge.match_id,
+            ts=edge.ts,
+            outcome=edge.outcome.value,
+            market_ticker=edge.market_ticker,
+            model_prob=edge.model_prob,
+            market_prob=edge.market_prob,
+            net_edge=edge.net_edge,
+            actionable=edge.actionable,
+            action=edge.action.value if edge.action else None,
+            data=edge.model_dump(mode="json"),
+        )
+
     def add_edge(self, edge: EdgeSignal) -> None:
         with self.session() as s:
-            s.add(
-                EdgeRow(
-                    match_id=edge.match_id,
-                    ts=edge.ts,
-                    outcome=edge.outcome.value,
-                    market_ticker=edge.market_ticker,
-                    model_prob=edge.model_prob,
-                    market_prob=edge.market_prob,
-                    net_edge=edge.net_edge,
-                    actionable=edge.actionable,
-                    action=edge.action.value if edge.action else None,
-                    data=edge.model_dump(mode="json"),
-                )
-            )
+            s.add(self._edge_row(edge))
+
+    def add_edges(self, edges: list[EdgeSignal]) -> None:
+        """One transaction for a tick's 1X2 edge signals instead of one per outcome."""
+        if not edges:
+            return
+        with self.session() as s:
+            s.add_all([self._edge_row(x) for x in edges])
 
     def record_decision(
         self,
@@ -248,16 +289,25 @@ class Database:
         data: dict[str, Any] | None = None,
         ts: datetime | None = None,
     ) -> None:
+        self.record_decisions([
+            {"kind": kind, "message": message, "match_id": match_id, "data": data, "ts": ts}
+        ])
+
+    def record_decisions(self, records: list[dict[str, Any]]) -> None:
+        """Batch-insert audit decision rows (one tick's signals) in a single transaction."""
+        if not records:
+            return
         with self.session() as s:
-            s.add(
+            s.add_all([
                 DecisionRow(
-                    ts=ts or utcnow(),
-                    match_id=match_id,
-                    kind=kind,
-                    message=message,
-                    data=data or {},
+                    ts=r.get("ts") or utcnow(),
+                    match_id=r.get("match_id"),
+                    kind=r["kind"],
+                    message=r["message"],
+                    data=r.get("data") or {},
                 )
-            )
+                for r in records
+            ])
 
     # -- replay / query helpers ------------------------------------------ #
     def match_ids(self) -> list[str]:

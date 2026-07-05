@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from . import trading
 from ..eventbus import Event, EventType
-from ..features.engineer import match_features
 from ..logging_setup import get_logger
 from ..market.implied import implied_from_markets
 from ..modeling.xg_proxy import observed_xg
@@ -73,13 +72,20 @@ class TickProcessor:
         trade: bool = True,
         persist: bool = True,
         decision_mode: str = "autonomous",
+        defer_book_epilogue: bool = False,
     ) -> None:
         self.rt = rt
         self.trade = trade
         self.persist = persist  # backtests set False to skip per-row DB writes
         # autonomous = auto-execute; advisory = queue proposals for human approval
         self.decision_mode = decision_mode
+        # When True (the live orchestrator), the whole-book mark-to-market + risk/portfolio
+        # snapshots are NOT done per match inside process(); the caller runs book_epilogue()
+        # ONCE per poll instead (O(positions) per poll, not O(matches × positions) per tick).
+        # Backtests leave this False and keep the inline per-match behaviour unchanged.
+        self._defer_epilogue = defer_book_epilogue
         self._last_eq = 0.0  # monotonic time of last equity-curve sample
+        self._coid_seq = 0  # monotonic suffix so same-minute coids can't collide
 
     async def process(
         self, match: MatchSnapshot, market_snaps: list[MarketSnapshot], mstate: MatchState
@@ -96,7 +102,6 @@ class TickProcessor:
             mstate.first_prob = probs
         self._sample_calibration(match, probs, mstate)
 
-        feats = match_features(match)
         # Strict two-sided book mids only: these become rt.last_mids — the marks behind
         # unrealized P&L, the daily-loss halt, and position stops. A one-sided book
         # keeps its previous mark rather than adopting a stale last-trade print.
@@ -109,10 +114,10 @@ class TickProcessor:
         # 2) Market-implied + edges
         view = implied_from_markets(market_snaps, method=cfg.edge.devig_method) if market_snaps else None
         edges = rt.detector.evaluate(probs, view) if view else []
+        if self.persist and edges:
+            rt.db.add_edges(edges)  # one txn for the tick's 1X2 edges
+            rt.audit.signals(edges)  # one file append + one decisions txn
         for edge in edges:
-            if self.persist:
-                rt.db.add_edge(edge)
-                rt.audit.signal(edge)
             rt.bus.publish(Event(EventType.EDGE, edge.model_dump(mode="json"), match.match_id))
 
         # 3) Alerts (goal / red card / divergence)
@@ -134,13 +139,19 @@ class TickProcessor:
         # 5) Mark-to-market across the WHOLE open book (all matches) + daily-loss guardrail.
         # ``mids`` are the REAL book mids from the market snapshots, so the unrealized
         # P&L the daily-loss halt keys off is a true mark, not the engine's own price.
-        rt.last_mids.update(mids)
-        rt.risk.update_unrealized(rt.portfolio.unrealized_pnl(rt.last_mids))
+        rt.last_mids.update(mids)  # per-match: this fixture contributes its fresh marks
+        # The whole-book unrealized mark + daily-loss check is O(open positions) and identical
+        # for every match in a poll, so in live mode the orchestrator runs it ONCE per poll via
+        # book_epilogue(); only backtests (sequential) do it inline here. Position stops below
+        # read last_mids directly and stay per-match either way.
+        if not self._defer_epilogue:
+            rt.risk.update_unrealized(rt.portfolio.unrealized_pnl(rt.last_mids))
         # Position-level stops: flatten a market whose mark-to-market loss has run past
         # the configured fraction of cost, before it can decay further to settlement.
         if self.trade and match.period.is_live:
             await self._check_position_stops(match, market_snaps)
-        self._sample_equity(rt)
+        if not self._defer_epilogue:
+            self._sample_equity(rt)
 
         # 6) Settlement
         if match.period.is_finished and not mstate.settled:
@@ -155,8 +166,34 @@ class TickProcessor:
             "edges": len(edges),
             "actionable": sum(1 for e in edges if e.actionable),
             "model": (probs.p_home, probs.p_draw, probs.p_away),
-            "features": feats,
         }
+
+    def _mint_coid(self, base: str) -> str:
+        """A unique client_order_id per decision. Two decisions on the same
+        match/market/minute/action — a re-fired position stop, or a re-poll landing on the
+        same match minute — would otherwise mint an identical coid and collide on the unique
+        OrderRow.client_order_id column, aborting the tick's persistence *after* the order was
+        placed and booked. A monotonic per-processor suffix makes each unique; capped ≤60 so
+        the exchange (64-char limit) always sees the full, distinct id."""
+        self._coid_seq += 1
+        return f"{base[:48]}:{self._coid_seq}"
+
+    def book_epilogue(self) -> None:
+        """Whole-book mark-to-market + daily-loss check + dashboard risk/portfolio snapshots
+        + equity sample. In live mode the orchestrator calls this ONCE per poll (after the
+        match gather), replacing the identical per-match work that ran inside process() —
+        these are all whole-book quantities, so doing them per match was O(matches ×
+        positions) of redundant recompute each tick.
+
+        The daily-loss halt this feeds therefore updates once per poll rather than mid-poll;
+        the per-trade / per-match dollar caps (checked under the trade lock) remain the
+        real-time guardrails. Only used when ``defer_book_epilogue`` was set; backtests keep
+        doing this inline per process() call, so their halt/equity behaviour is unchanged."""
+        rt = self.rt
+        rt.risk.update_unrealized(rt.portfolio.unrealized_pnl(rt.last_mids))
+        rt.state.risk = rt.risk.snapshot()
+        rt.state.portfolio = rt.portfolio.snapshot(rt.last_mids)
+        self._sample_equity(rt)
 
     def _sample_calibration(self, match, probs, mstate) -> None:
         """Pool a prediction at each checkpoint minute crossed (in-play, not just
@@ -220,7 +257,7 @@ class TickProcessor:
 
         # Autonomous: execute immediately.
         snap = next((s for s in market_snaps if s.market_ticker == ticker), None)
-        coid = f"{match.match_id}:{ticker}:{match.minute}:{decision.action.value}"[:60]
+        coid = self._mint_coid(f"{match.match_id}:{ticker}:{match.minute}:{decision.action.value}")
         _result, n_fills = await trading.place_and_book(
             rt,
             coid=coid,
@@ -306,7 +343,7 @@ class TickProcessor:
             action = OrderAction.SELL if net > 0 else OrderAction.BUY
             snap = next((s for s in market_snaps if s.market_ticker == ticker), None)
             price = trading._closing_price_cents(snap, action)
-            coid = f"stop:{ticker}:{match.minute}"[:60]
+            coid = self._mint_coid(f"stop:{ticker}:{match.minute}")
             _result, n_fills = await trading.place_and_book(
                 rt,
                 coid=coid,
@@ -454,5 +491,8 @@ class TickProcessor:
                 "context": match_context_view(match),
             },
         )
-        rt.state.risk = rt.risk.snapshot()
-        rt.state.portfolio = rt.portfolio.snapshot(rt.last_mids)
+        # Whole-book snapshots are per-POLL in live mode (book_epilogue); the per-match
+        # update_match above always runs so each fixture's own card stays fresh.
+        if not self._defer_epilogue:
+            rt.state.risk = rt.risk.snapshot()
+            rt.state.portfolio = rt.portfolio.snapshot(rt.last_mids)
