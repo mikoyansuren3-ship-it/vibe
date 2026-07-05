@@ -141,14 +141,11 @@ def _iter_text_streams(path: str | Path) -> Iterator[tuple[str, io.TextIOBase]]:
             for member in tf.getmembers():
                 if not member.isfile():
                     continue
-                fh = tf.extractfile(member)
-                if fh is None:
+                member_fh = tf.extractfile(member)  # distinct name: keeps `fh` below text-typed
+                if member_fh is None:
                     continue
-                if member.name.endswith(".bz2"):
-                    stream = bz2.open(fh, "rt", encoding="utf-8", errors="replace")
-                else:
-                    stream = io.TextIOWrapper(fh, encoding="utf-8", errors="replace")
-                yield member.name, stream
+                raw = bz2.BZ2File(member_fh) if member.name.endswith(".bz2") else member_fh
+                yield member.name, io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
         return
     if p.suffix == ".bz2":
         with bz2.open(p, "rt", encoding="utf-8") as fh:
