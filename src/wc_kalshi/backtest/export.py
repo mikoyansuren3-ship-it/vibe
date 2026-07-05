@@ -423,8 +423,18 @@ async def export_bundles(
     Returns the manifest dict (also written to ``manifest.json``).
     """
     src = Database(db_path if db_path.startswith("sqlite") else f"sqlite:///{db_path}")
+    # Load each match's snapshots ONCE and share them across BOTH replays (kelly + fixed) and
+    # the bundle builder — previously each match was deserialized 3–4×. The settled set comes
+    # from SQL (matches with any FT snapshot), exactly the replay's own skip criterion, so we
+    # never even load the snapshots of in-progress/abandoned fixtures the replay would drop.
+    requested = match_ids if match_ids is not None else src.match_ids()
+    settled = src.settled_match_ids()
+    ids = [mid for mid in requested if mid in settled]
+    loaded: dict[str, tuple[list, list]] = {
+        mid: (src.iter_match_snapshots(mid), src.iter_market_snapshots(mid)) for mid in ids
+    }
     bt = Backtester(cfg, trade=True, stake_mode=stake_mode)
-    result = await bt.run_replay(src, match_ids=match_ids)
+    result = await bt.run_replay(preloaded=loaded, match_ids=ids)
     rt = bt.rt
     kelly_factor = float(result.calibration.get("calibration_factor", 1.0))
 
@@ -442,8 +452,7 @@ async def export_bundles(
     out.mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, Any]] = []
     for mid in settled_ids:
-        match_snaps = src.iter_match_snapshots(mid)
-        market_snaps = src.iter_market_snapshots(mid)
+        match_snaps, market_snaps = loaded[mid]  # reuse the single load — no re-deserialize
         bundle = build_bundle(
             cfg, mid, match_snaps, market_snaps,
             fills_by_match.get(mid, []), pnl_by_match.get(mid, 0.0), kelly_factor,
@@ -483,7 +492,7 @@ async def export_bundles(
     # baseline (what the web engine reproduces). When already fixed, they coincide.
     if stake_mode != "fixed":
         bt_fixed = Backtester(cfg, trade=True, stake_mode="fixed")
-        fixed_result = await bt_fixed.run_replay(src, match_ids=match_ids)
+        fixed_result = await bt_fixed.run_replay(preloaded=loaded, match_ids=ids)
         edge_eval = fixed_result.to_dict()
         await bt_fixed.aclose()
     else:

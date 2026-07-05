@@ -511,3 +511,32 @@ def test_hot_per_match_query_uses_composite_index(tmp_path):
     detail = " ".join(str(r) for r in plan).lower()
     assert "ix_match_snapshots_mid_ts" in detail  # composite index drives the scan
     assert "temp b-tree" not in detail  # ...so the ORDER BY needs no sort step
+
+
+def test_export_loads_each_match_snapshots_once(cfg, tmp_path, monkeypatch):
+    """Single-pass export: each settled match's snapshots deserialize exactly ONCE (shared
+    across both replays + the bundle builder, was 3–4×), and an unsettled match — excluded by
+    the SQL settled-set — is never loaded at all."""
+    from wc_kalshi.backtest.export import export_bundles
+    from wc_kalshi.models.db import Database
+
+    db_path = f"sqlite:///{tmp_path / 'rec.sqlite3'}"
+    db = Database(db_path)
+    _engineered_bet_match(db, "m_win", home_final=2, away_final=0)
+    _engineered_bet_match(db, "m_lose", home_final=0, away_final=1)
+    live = _match(30, MatchPeriod.FIRST_HALF, 0, 0, ts=T0)  # unsettled: no FT snapshot
+    live.match_id = "m_live"
+    db.add_match_snapshot(live)
+
+    loads: dict[str, int] = {}
+    real = Database.iter_match_snapshots
+
+    def spy(self, mid):
+        loads[mid] = loads.get(mid, 0) + 1
+        return real(self, mid)
+
+    monkeypatch.setattr(Database, "iter_match_snapshots", spy)
+    asyncio.run(export_bundles(cfg, db_path, str(tmp_path / "out")))
+
+    assert loads.get("m_win") == 1 and loads.get("m_lose") == 1  # once each, not 3–4×
+    assert "m_live" not in loads  # unsettled: filtered by the SQL settled-set, never loaded

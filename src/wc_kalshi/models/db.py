@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from ..util import utcnow
-from .schemas import EdgeSignal, MarketSnapshot, MatchSnapshot, Probabilities
+from .schemas import EdgeSignal, MarketSnapshot, MatchPeriod, MatchSnapshot, Probabilities
 
 
 class Base(DeclarativeBase):
@@ -358,6 +358,19 @@ class Database:
                 .order_by(R.match_id)
             ).all()
             return [(r.match_id, r.period, r.ts) for r in rows]
+
+    def settled_match_ids(self) -> set[str]:
+        """Match ids that reached a finished (FT) state in ANY snapshot — the replay-eligible
+        set — via one indexed query, WITHOUT loading snapshots. Exactly equivalent to
+        ``any(s.period.is_finished for s in snaps)`` because ``is_finished`` ⟺ period is
+        FULL_TIME, so the export can filter to settled matches before deserializing anything."""
+        with self.session() as s:
+            rows = s.execute(
+                select(MatchSnapshotRow.match_id)
+                .where(MatchSnapshotRow.period == MatchPeriod.FULL_TIME.value)
+                .distinct()
+            ).scalars().all()
+            return set(rows)
 
     def iter_match_snapshots(self, match_id: str) -> list[MatchSnapshot]:
         with self.session() as s:
