@@ -315,6 +315,11 @@ def build_bundle(
         "away_team": first.away_team,
         "home_elo": ctx.home_elo if ctx else None,
         "away_elo": ctx.away_elo if ctx else None,
+        # Stage metadata for the web StageBadge / knockout labelling. The 1X2 market the
+        # bot trades settles on the 90' regulation score even for a knockout tie (→ "D"),
+        # so this is display-only; round is None for group games (badge renders nothing).
+        "is_knockout": bool(ctx.is_knockout) if ctx else False,
+        "round": ctx.round if ctx else None,
         "outcome": res,
         "final_score": [hs_final, as_final],
         "tickers": tickers,
@@ -475,6 +480,8 @@ async def export_bundles(
             "match_id": mid,
             "home_team": bundle["home_team"],
             "away_team": bundle["away_team"],
+            "is_knockout": bundle["is_knockout"],
+            "round": bundle["round"],
             "outcome": bundle["outcome"],
             "final_score": bundle["final_score"],
             "n_ticks": bundle["n_ticks"],

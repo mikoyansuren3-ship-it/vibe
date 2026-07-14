@@ -27,22 +27,22 @@ MANIFEST = REPO_ROOT / "web" / "public" / "bundles" / "manifest.json"
 # the model/config/DB changes. NOTE: Kelly fills are bankroll-sensitive via the position/
 # exposure caps, so the bankroll is part of the reproducibility contract.
 GOLDEN_AGGREGATE = {
-    "n_matches": 36,
-    "n_fills": 282,
+    "n_matches": 61,
+    "n_fills": 406,
     "stake_mode": "kelly",
-    "avg_clv_preoff": -0.0817,
-    "clv_n_preoff": 282,
-    "avg_clv_5m": -0.0018,
-    "avg_clv": 0.04,
-    "roi": -0.0139,
-    "realized_pnl": -1.39,
+    "avg_clv_preoff": -0.0768,
+    "clv_n_preoff": 406,
+    "avg_clv_5m": -0.0038,
+    "avg_clv": -0.0237,
+    "roi": -0.9586,
+    "realized_pnl": -95.86,
     "edge_verdict": "negative",
-    "n_clusters_preoff": 35,
+    "n_clusters_preoff": 56,
 }
-GOLDEN_CALIBRATION = {"ece": 0.0317, "brier": 0.4259}
-GOLDEN_CLV_CI_PREOFF = [-0.1087, -0.0548]  # match-clustered 95% CI (deterministic, seed=0)
+GOLDEN_CALIBRATION = {"ece": 0.0376, "brier": 0.5043}
+GOLDEN_CLV_CI_PREOFF = [-0.0988, -0.0533]  # match-clustered 95% CI (deterministic, seed=0)
 # Look-ahead-free fixed-stake cross-check (manifest["edge_eval"]).
-GOLDEN_EDGE_EVAL = {"n_fills": 302, "stake_mode": "fixed", "avg_clv_preoff": -0.041, "edge_verdict": "negative"}
+GOLDEN_EDGE_EVAL = {"n_fills": 492, "stake_mode": "fixed", "avg_clv_preoff": -0.0597, "edge_verdict": "negative"}
 
 
 @pytest.fixture(scope="module")
