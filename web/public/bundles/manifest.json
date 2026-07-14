@@ -4,6 +4,8 @@
       "match_id": "1489394",
       "home_team": "Tunisia",
       "away_team": "Japan",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         0,
@@ -20,6 +22,8 @@
       "match_id": "1489395",
       "home_team": "Belgium",
       "away_team": "Iran",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         0,
@@ -36,6 +40,8 @@
       "match_id": "1489396",
       "home_team": "New Zealand",
       "away_team": "Egypt",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         1,
@@ -52,13 +58,15 @@
       "match_id": "1489397",
       "home_team": "Spain",
       "away_team": "Saudi Arabia",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         4,
         0
       ],
       "n_ticks": 439,
-      "n_fills": 3,
+      "n_fills": 2,
       "has_derived": false,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -68,6 +76,8 @@
       "match_id": "1489398",
       "home_team": "Uruguay",
       "away_team": "Cape Verde Islands",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         2,
@@ -84,13 +94,15 @@
       "match_id": "1489399",
       "home_team": "Argentina",
       "away_team": "Austria",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         2,
         0
       ],
       "n_ticks": 605,
-      "n_fills": 14,
+      "n_fills": 12,
       "has_derived": false,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -100,6 +112,8 @@
       "match_id": "1489400",
       "home_team": "Jordan",
       "away_team": "Algeria",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         1,
@@ -116,13 +130,15 @@
       "match_id": "1489401",
       "home_team": "Norway",
       "away_team": "Senegal",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         3,
         2
       ],
       "n_ticks": 404,
-      "n_fills": 8,
+      "n_fills": 6,
       "has_derived": false,
       "first_capture_minute": 14,
       "preoff_is_kickoff": false,
@@ -132,13 +148,15 @@
       "match_id": "1489402",
       "home_team": "England",
       "away_team": "Ghana",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         0,
         0
       ],
       "n_ticks": 395,
-      "n_fills": 11,
+      "n_fills": 10,
       "has_derived": false,
       "first_capture_minute": 7,
       "preoff_is_kickoff": false,
@@ -148,6 +166,8 @@
       "match_id": "1489403",
       "home_team": "Panama",
       "away_team": "Croatia",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         0,
@@ -164,6 +184,8 @@
       "match_id": "1489404",
       "home_team": "Portugal",
       "away_team": "Uzbekistan",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         5,
@@ -180,6 +202,8 @@
       "match_id": "1489407",
       "home_team": "South Africa",
       "away_team": "South Korea",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         1,
@@ -196,6 +220,8 @@
       "match_id": "1489408",
       "home_team": "Switzerland",
       "away_team": "Canada",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         2,
@@ -212,6 +238,8 @@
       "match_id": "1489409",
       "home_team": "Cura\u00e7ao",
       "away_team": "Ivory Coast",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         0,
@@ -228,6 +256,8 @@
       "match_id": "1489410",
       "home_team": "Ecuador",
       "away_team": "Germany",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         2,
@@ -244,6 +274,8 @@
       "match_id": "1489411",
       "home_team": "Paraguay",
       "away_team": "Australia",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         0,
@@ -260,13 +292,15 @@
       "match_id": "1489412",
       "home_team": "Tunisia",
       "away_team": "Netherlands",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         1,
         3
       ],
       "n_ticks": 449,
-      "n_fills": 2,
+      "n_fills": 1,
       "has_derived": true,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -276,6 +310,8 @@
       "match_id": "1489413",
       "home_team": "Cape Verde Islands",
       "away_team": "Saudi Arabia",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         0,
@@ -292,6 +328,8 @@
       "match_id": "1489414",
       "home_team": "Egypt",
       "away_team": "Iran",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         1,
@@ -308,13 +346,15 @@
       "match_id": "1489415",
       "home_team": "New Zealand",
       "away_team": "Belgium",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         1,
         5
       ],
       "n_ticks": 462,
-      "n_fills": 4,
+      "n_fills": 3,
       "has_derived": true,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -324,6 +364,8 @@
       "match_id": "1489416",
       "home_team": "Norway",
       "away_team": "France",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         1,
@@ -340,13 +382,15 @@
       "match_id": "1489417",
       "home_team": "Uruguay",
       "away_team": "Spain",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         0,
         1
       ],
       "n_ticks": 258,
-      "n_fills": 5,
+      "n_fills": 4,
       "has_derived": true,
       "first_capture_minute": 47,
       "preoff_is_kickoff": false,
@@ -356,6 +400,8 @@
       "match_id": "1489418",
       "home_team": "Algeria",
       "away_team": "Austria",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         3,
@@ -372,6 +418,8 @@
       "match_id": "1489419",
       "home_team": "Colombia",
       "away_team": "Portugal",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         0,
@@ -388,13 +436,15 @@
       "match_id": "1489420",
       "home_team": "Croatia",
       "away_team": "Ghana",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         2,
         1
       ],
       "n_ticks": 480,
-      "n_fills": 12,
+      "n_fills": 11,
       "has_derived": true,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -404,13 +454,15 @@
       "match_id": "1489421",
       "home_team": "Jordan",
       "away_team": "Argentina",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         1,
         3
       ],
       "n_ticks": 452,
-      "n_fills": 2,
+      "n_fills": 1,
       "has_derived": true,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -420,6 +472,8 @@
       "match_id": "1489422",
       "home_team": "Panama",
       "away_team": "England",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         0,
@@ -436,6 +490,8 @@
       "match_id": "1539008",
       "home_team": "Colombia",
       "away_team": "Congo DR",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         1,
@@ -452,13 +508,15 @@
       "match_id": "1539009",
       "home_team": "Bosnia & Herzegovina",
       "away_team": "Qatar",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         3,
         1
       ],
       "n_ticks": 284,
-      "n_fills": 6,
+      "n_fills": 7,
       "has_derived": false,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -468,6 +526,8 @@
       "match_id": "1539010",
       "home_team": "Czechia",
       "away_team": "Mexico",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         0,
@@ -484,6 +544,8 @@
       "match_id": "1539011",
       "home_team": "Japan",
       "away_team": "Sweden",
+      "is_knockout": false,
+      "round": null,
       "outcome": "D",
       "final_score": [
         1,
@@ -500,13 +562,15 @@
       "match_id": "1539012",
       "home_team": "T\u00fcrkiye",
       "away_team": "USA",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         3,
         2
       ],
       "n_ticks": 514,
-      "n_fills": 9,
+      "n_fills": 10,
       "has_derived": true,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -516,13 +580,15 @@
       "match_id": "1539013",
       "home_team": "Congo DR",
       "away_team": "Uzbekistan",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         3,
         1
       ],
       "n_ticks": 469,
-      "n_fills": 13,
+      "n_fills": 12,
       "has_derived": true,
       "first_capture_minute": 1,
       "preoff_is_kickoff": true,
@@ -532,13 +598,15 @@
       "match_id": "1539017",
       "home_team": "France",
       "away_team": "Iraq",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         3,
         0
       ],
       "n_ticks": 315,
-      "n_fills": 3,
+      "n_fills": 2,
       "has_derived": false,
       "first_capture_minute": 3,
       "preoff_is_kickoff": false,
@@ -548,6 +616,8 @@
       "match_id": "1539074",
       "home_team": "Senegal",
       "away_team": "Iraq",
+      "is_knockout": false,
+      "round": null,
       "outcome": "H",
       "final_score": [
         5,
@@ -564,144 +634,598 @@
       "match_id": "1561329",
       "home_team": "South Africa",
       "away_team": "Canada",
+      "is_knockout": false,
+      "round": null,
       "outcome": "A",
       "final_score": [
         0,
         1
       ],
       "n_ticks": 466,
-      "n_fills": 10,
+      "n_fills": 12,
       "has_derived": true,
       "first_capture_minute": 4,
       "preoff_is_kickoff": false,
       "tick_gap_p95_seconds": 21.7
+    },
+    {
+      "match_id": "1562344",
+      "home_team": "Brazil",
+      "away_team": "Japan",
+      "is_knockout": false,
+      "round": null,
+      "outcome": "H",
+      "final_score": [
+        2,
+        1
+      ],
+      "n_ticks": 575,
+      "n_fills": 13,
+      "has_derived": true,
+      "first_capture_minute": 15,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 21.5
+    },
+    {
+      "match_id": "1562345",
+      "home_team": "Netherlands",
+      "away_team": "Morocco",
+      "is_knockout": false,
+      "round": null,
+      "outcome": "D",
+      "final_score": [
+        1,
+        1
+      ],
+      "n_ticks": 217,
+      "n_fills": 9,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 23.4
+    },
+    {
+      "match_id": "1562586",
+      "home_team": "USA",
+      "away_team": "Bosnia & Herzegovina",
+      "is_knockout": true,
+      "round": "Round of 32",
+      "outcome": "H",
+      "final_score": [
+        2,
+        0
+      ],
+      "n_ticks": 277,
+      "n_fills": 7,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 22.9
+    },
+    {
+      "match_id": "1564789",
+      "home_team": "Ivory Coast",
+      "away_team": "Norway",
+      "is_knockout": false,
+      "round": null,
+      "outcome": "A",
+      "final_score": [
+        1,
+        2
+      ],
+      "n_ticks": 263,
+      "n_fills": 12,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 21.9
+    },
+    {
+      "match_id": "1565176",
+      "home_team": "Germany",
+      "away_team": "Paraguay",
+      "is_knockout": false,
+      "round": null,
+      "outcome": "D",
+      "final_score": [
+        1,
+        1
+      ],
+      "n_ticks": 514,
+      "n_fills": 7,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 24.2
+    },
+    {
+      "match_id": "1565177",
+      "home_team": "France",
+      "away_team": "Sweden",
+      "is_knockout": false,
+      "round": null,
+      "outcome": "H",
+      "final_score": [
+        3,
+        0
+      ],
+      "n_ticks": 374,
+      "n_fills": 6,
+      "has_derived": true,
+      "first_capture_minute": 3,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 22.0
+    },
+    {
+      "match_id": "1565178",
+      "home_team": "Australia",
+      "away_team": "Egypt",
+      "is_knockout": true,
+      "round": "Round of 32",
+      "outcome": "D",
+      "final_score": [
+        1,
+        1
+      ],
+      "n_ticks": 899,
+      "n_fills": 9,
+      "has_derived": true,
+      "first_capture_minute": 2,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 21.7
+    },
+    {
+      "match_id": "1565179",
+      "home_team": "Argentina",
+      "away_team": "Cape Verde Islands",
+      "is_knockout": true,
+      "round": "Round of 32",
+      "outcome": "D",
+      "final_score": [
+        1,
+        1
+      ],
+      "n_ticks": 778,
+      "n_fills": 6,
+      "has_derived": true,
+      "first_capture_minute": 45,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 18.1
+    },
+    {
+      "match_id": "1567306",
+      "home_team": "Mexico",
+      "away_team": "Ecuador",
+      "is_knockout": false,
+      "round": null,
+      "outcome": "H",
+      "final_score": [
+        2,
+        0
+      ],
+      "n_ticks": 222,
+      "n_fills": 1,
+      "has_derived": true,
+      "first_capture_minute": 30,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 21.7
+    },
+    {
+      "match_id": "1567308",
+      "home_team": "Belgium",
+      "away_team": "Senegal",
+      "is_knockout": false,
+      "round": null,
+      "outcome": "D",
+      "final_score": [
+        2,
+        2
+      ],
+      "n_ticks": 941,
+      "n_fills": 13,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 21.7
+    },
+    {
+      "match_id": "1567309",
+      "home_team": "Portugal",
+      "away_team": "Croatia",
+      "is_knockout": true,
+      "round": "Round of 32",
+      "outcome": "H",
+      "final_score": [
+        2,
+        1
+      ],
+      "n_ticks": 622,
+      "n_fills": 15,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 22.0
+    },
+    {
+      "match_id": "1567310",
+      "home_team": "Colombia",
+      "away_team": "Ghana",
+      "is_knockout": true,
+      "round": "Round of 32",
+      "outcome": "H",
+      "final_score": [
+        1,
+        0
+      ],
+      "n_ticks": 185,
+      "n_fills": 3,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 22.4
+    },
+    {
+      "match_id": "1567311",
+      "home_team": "Spain",
+      "away_team": "Austria",
+      "is_knockout": true,
+      "round": "Round of 32",
+      "outcome": "H",
+      "final_score": [
+        3,
+        0
+      ],
+      "n_ticks": 228,
+      "n_fills": 3,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 23.8
+    },
+    {
+      "match_id": "1567312",
+      "home_team": "Switzerland",
+      "away_team": "Algeria",
+      "is_knockout": true,
+      "round": "Round of 32",
+      "outcome": "H",
+      "final_score": [
+        2,
+        0
+      ],
+      "n_ticks": 386,
+      "n_fills": 3,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 22.2
+    },
+    {
+      "match_id": "1567824",
+      "home_team": "Canada",
+      "away_team": "Morocco",
+      "is_knockout": true,
+      "round": "Round of 16",
+      "outcome": "A",
+      "final_score": [
+        0,
+        3
+      ],
+      "n_ticks": 22,
+      "n_fills": 2,
+      "has_derived": true,
+      "first_capture_minute": 12,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 1724.1
+    },
+    {
+      "match_id": "1568100",
+      "home_team": "Brazil",
+      "away_team": "Norway",
+      "is_knockout": true,
+      "round": "Round of 16",
+      "outcome": "A",
+      "final_score": [
+        1,
+        2
+      ],
+      "n_ticks": 615,
+      "n_fills": 7,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 17.1
+    },
+    {
+      "match_id": "1569870",
+      "home_team": "Paraguay",
+      "away_team": "France",
+      "is_knockout": true,
+      "round": "Round of 16",
+      "outcome": "A",
+      "final_score": [
+        0,
+        1
+      ],
+      "n_ticks": 424,
+      "n_fills": 7,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 22.1
+    },
+    {
+      "match_id": "1570715",
+      "home_team": "USA",
+      "away_team": "Belgium",
+      "is_knockout": true,
+      "round": "Round of 16",
+      "outcome": "A",
+      "final_score": [
+        1,
+        4
+      ],
+      "n_ticks": 26,
+      "n_fills": 0,
+      "has_derived": true,
+      "first_capture_minute": 45,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 1325.1
+    },
+    {
+      "match_id": "1576756",
+      "home_team": "Portugal",
+      "away_team": "Spain",
+      "is_knockout": true,
+      "round": "Round of 16",
+      "outcome": "A",
+      "final_score": [
+        0,
+        1
+      ],
+      "n_ticks": 186,
+      "n_fills": 0,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 43.2
+    },
+    {
+      "match_id": "1576805",
+      "home_team": "Switzerland",
+      "away_team": "Colombia",
+      "is_knockout": true,
+      "round": "Round of 16",
+      "outcome": "D",
+      "final_score": [
+        0,
+        0
+      ],
+      "n_ticks": 1140,
+      "n_fills": 0,
+      "has_derived": true,
+      "first_capture_minute": 4,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 16.5
+    },
+    {
+      "match_id": "1578539",
+      "home_team": "France",
+      "away_team": "Morocco",
+      "is_knockout": true,
+      "round": "Quarter-finals",
+      "outcome": "H",
+      "final_score": [
+        2,
+        0
+      ],
+      "n_ticks": 202,
+      "n_fills": 1,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 18.7
+    },
+    {
+      "match_id": "1581037",
+      "home_team": "Norway",
+      "away_team": "England",
+      "is_knockout": true,
+      "round": "Quarter-finals",
+      "outcome": "D",
+      "final_score": [
+        1,
+        1
+      ],
+      "n_ticks": 1225,
+      "n_fills": 3,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.5
+    },
+    {
+      "match_id": "1581821",
+      "home_team": "Spain",
+      "away_team": "Belgium",
+      "is_knockout": true,
+      "round": "Quarter-finals",
+      "outcome": "H",
+      "final_score": [
+        2,
+        1
+      ],
+      "n_ticks": 680,
+      "n_fills": 5,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.6
+    },
+    {
+      "match_id": "1582681",
+      "home_team": "Argentina",
+      "away_team": "Switzerland",
+      "is_knockout": true,
+      "round": "Quarter-finals",
+      "outcome": "D",
+      "final_score": [
+        1,
+        1
+      ],
+      "n_ticks": 1168,
+      "n_fills": 1,
+      "has_derived": true,
+      "first_capture_minute": 1,
+      "preoff_is_kickoff": true,
+      "tick_gap_p95_seconds": 16.8
+    },
+    {
+      "match_id": "1585131",
+      "home_team": "France",
+      "away_team": "Spain",
+      "is_knockout": true,
+      "round": "Semi-finals",
+      "outcome": "A",
+      "final_score": [
+        0,
+        2
+      ],
+      "n_ticks": 106,
+      "n_fills": 0,
+      "has_derived": true,
+      "first_capture_minute": 12,
+      "preoff_is_kickoff": false,
+      "tick_gap_p95_seconds": 19.9
     }
   ],
   "aggregate": {
-    "n_matches": 36,
-    "n_fills": 282,
+    "n_matches": 61,
+    "n_fills": 406,
     "stake_mode": "kelly",
     "data_source": "kalshi_replay",
-    "realized_pnl": -1.39,
+    "realized_pnl": -95.86,
     "fees_paid": 0.0,
-    "gross_pnl": -1.39,
-    "roi": -0.0139,
-    "t_stat": -0.01,
+    "gross_pnl": -95.86,
+    "roi": -0.9586,
+    "t_stat": -0.38,
     "pnl_ci": [
-      -13.62,
-      14.841
+      -9.508,
+      6.809
     ],
-    "avg_clv": 0.04,
-    "clv_n": 282,
-    "avg_clv_preoff": -0.0817,
-    "clv_n_preoff": 282,
-    "avg_clv_5m": -0.0018,
-    "clv_n_5m": 257,
+    "avg_clv": -0.0237,
+    "clv_n": 406,
+    "avg_clv_preoff": -0.0768,
+    "clv_n_preoff": 406,
+    "avg_clv_5m": -0.0038,
+    "clv_n_5m": 379,
     "clv_ci_preoff": [
-      -0.1087,
-      -0.0548
+      -0.0988,
+      -0.0533
     ],
     "clv_ci_5m": [
       -0.0184,
-      0.0134
+      0.0098
     ],
     "clv_ci_close": [
-      -0.0832,
-      0.1613
+      -0.1221,
+      0.0776
     ],
-    "n_clusters_preoff": 35,
+    "n_clusters_preoff": 56,
     "edge_verdict": "negative",
     "starting_bankroll": 100.0,
-    "ending_equity": 98.61,
+    "ending_equity": 4.14,
     "calibration": {
-      "n": 498.0,
-      "brier": 0.4259,
-      "log_loss": 0.7278,
-      "ece": 0.0317,
-      "calibration_factor": 0.8415
+      "n": 737.0,
+      "brier": 0.5043,
+      "log_loss": 0.8522,
+      "rps": 0.1526,
+      "ece": 0.0376,
+      "calibration_factor": 0.8121
     },
     "calibration_per_outcome": {
       "home": {
-        "mean_predicted": 0.3802,
-        "empirical_freq": 0.3815,
-        "bias": -0.0014,
-        "ece": 0.0785
+        "mean_predicted": 0.3869,
+        "empirical_freq": 0.3935,
+        "bias": -0.0066,
+        "ece": 0.0791
       },
       "draw": {
-        "mean_predicted": 0.3126,
-        "empirical_freq": 0.3293,
-        "bias": -0.0167,
-        "ece": 0.0826
+        "mean_predicted": 0.325,
+        "empirical_freq": 0.3379,
+        "bias": -0.0128,
+        "ece": 0.0778
       },
       "away": {
-        "mean_predicted": 0.3072,
-        "empirical_freq": 0.2892,
-        "bias": 0.0181,
-        "ece": 0.0591
+        "mean_predicted": 0.2881,
+        "empirical_freq": 0.2687,
+        "bias": 0.0194,
+        "ece": 0.0583
       }
     }
   },
   "edge_eval": {
-    "n_matches": 36,
-    "n_fills": 302,
+    "n_matches": 61,
+    "n_fills": 492,
     "stake_mode": "fixed",
     "data_source": "kalshi_replay",
-    "realized_pnl": -52.29,
+    "realized_pnl": -166.94,
     "fees_paid": 0.0,
-    "gross_pnl": -52.29,
-    "roi": -0.5229,
-    "t_stat": -0.84,
+    "gross_pnl": -166.94,
+    "roi": -1.6694,
+    "t_stat": -2.06,
     "pnl_ci": [
-      -4.56,
-      1.986
+      -5.095,
+      -0.183
     ],
-    "avg_clv": 0.0011,
-    "clv_n": 302,
-    "avg_clv_preoff": -0.041,
-    "clv_n_preoff": 302,
-    "avg_clv_5m": -0.0095,
-    "clv_n_5m": 282,
+    "avg_clv": -0.0528,
+    "clv_n": 492,
+    "avg_clv_preoff": -0.0597,
+    "clv_n_preoff": 492,
+    "avg_clv_5m": -0.001,
+    "clv_n_5m": 463,
     "clv_ci_preoff": [
-      -0.0691,
-      -0.0127
+      -0.0812,
+      -0.0373
     ],
     "clv_ci_5m": [
-      -0.0258,
-      0.0056
+      -0.0126,
+      0.0096
     ],
     "clv_ci_close": [
-      -0.1287,
-      0.1342
+      -0.1462,
+      0.0489
     ],
-    "n_clusters_preoff": 35,
+    "n_clusters_preoff": 60,
     "edge_verdict": "negative",
     "starting_bankroll": 100.0,
-    "ending_equity": 47.71,
+    "ending_equity": -66.94,
     "calibration": {
-      "n": 518.0,
-      "brier": 0.459,
-      "log_loss": 0.9702,
-      "ece": 0.0291,
-      "calibration_factor": 0.8543
+      "n": 823.0,
+      "brier": 0.525,
+      "log_loss": 0.9715,
+      "rps": 0.1592,
+      "ece": 0.0328,
+      "calibration_factor": 0.8361
     },
     "calibration_per_outcome": {
       "home": {
-        "mean_predicted": 0.3658,
-        "empirical_freq": 0.3687,
-        "bias": -0.003,
-        "ece": 0.0694
+        "mean_predicted": 0.3873,
+        "empirical_freq": 0.3755,
+        "bias": 0.0118,
+        "ece": 0.0811
       },
       "draw": {
-        "mean_predicted": 0.3138,
-        "empirical_freq": 0.3069,
-        "bias": 0.0069,
-        "ece": 0.0726
+        "mean_predicted": 0.3212,
+        "empirical_freq": 0.3366,
+        "bias": -0.0154,
+        "ece": 0.0652
       },
       "away": {
-        "mean_predicted": 0.3204,
-        "empirical_freq": 0.3243,
-        "bias": -0.0039,
-        "ece": 0.0588
+        "mean_predicted": 0.2915,
+        "empirical_freq": 0.288,
+        "bias": 0.0036,
+        "ece": 0.0527
       }
     }
   },
@@ -722,17 +1246,17 @@
     "late_taper_minutes": 15,
     "late_taper_floor": 0.34,
     "bankroll": 100.0,
-    "kelly_factor": 0.8415
+    "kelly_factor": 0.8121
   },
   "provenance": {
-    "generated_at": "2026-06-29T18:24:19+00:00",
-    "model_git_sha": "9e63dae",
-    "config_sha256": "5e8e763a989c7154",
+    "generated_at": "2026-07-14T22:02:00+00:00",
+    "model_git_sha": "537b04b",
+    "config_sha256": "5dd9cc1a4bd8e5b1",
     "stake_mode": "kelly",
     "db": {
       "name": "wc_tournament.sqlite3",
-      "size_bytes": 891506688,
-      "sha256": "debe3a90970a2119"
+      "size_bytes": 1782583296,
+      "sha256": "f66c45ad76607ceb"
     },
     "xg_proxy": {
       "sot": 0.1865,
@@ -743,9 +1267,9 @@
     "note": "Model probs/Brier/ECE are RECOMPUTED with current code at export. config_sha256 + model_git_sha pin which code produced these numbers; re-export after a model change moves the headline (see golden-numbers test)."
   },
   "coverage_summary": {
-    "n_matches": 36,
-    "n_kickoff": 26,
-    "n_mid_game_start": 10,
-    "note": "preoff CLV for the 10 mid-game-start match(es) references a mid-match line, not a true opening line \u2014 exclude them for a clean headline."
+    "n_matches": 61,
+    "n_kickoff": 43,
+    "n_mid_game_start": 18,
+    "note": "preoff CLV for the 18 mid-game-start match(es) references a mid-match line, not a true opening line \u2014 exclude them for a clean headline."
   }
 }
